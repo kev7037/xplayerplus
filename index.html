@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="پخش کننده موزیک xPlayer با قابلیت پلی‌لیست و shuffle">
+    <meta name="theme-color" content="#1a1a2e">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>xPlayer</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="icon" type="image/svg+xml" href="icon.svg">
+</head>
+<body>
+    <div class="app-wrapper">
+        <!-- Main Content -->
+        <div class="main-content">
+            <div class="container">
+                <!-- Home Page -->
+                <div id="homePage" class="page active">
+                    <div class="page-header">
+                        <div class="header-spacer"></div>
+                        <h1>خانه</h1>
+                        <div class="header-spacer"></div>
+                    </div>
+                    
+                    <!-- Recent Playlists -->
+                    <section class="content-section">
+                        <h2 class="section-title">پلی‌لیست‌های اخیر</h2>
+                        <div id="recentPlaylists" class="playlists-grid">
+                            <p class="empty-state">هیچ پلی‌لیستی پخش نشده است</p>
+                        </div>
+                    </section>
+                    
+                    <!-- Recent Tracks -->
+                    <section class="content-section">
+                        <h2 class="section-title">موزیک‌های اخیر</h2>
+                        <div id="recentTracks" class="tracks-grid">
+                            <p class="empty-state">هیچ موزیکی پخش نشده است</p>
+                        </div>
+                    </section>
+                </div>
+
+                <!-- Search Page -->
+                <div id="searchPage" class="page">
+                    <div class="page-header">
+                        <div class="header-spacer"></div>
+                        <h1>جستجو</h1>
+                        <div class="header-spacer"></div>
+                    </div>
+                    
+                    <section class="content-section search-page-content">
+                        <div class="search-box-wrapper">
+                            <div class="search-box-large">
+                                <span class="search-icon">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                        <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+                                    </svg>
+                                </span>
+                                <input 
+                                    type="text" 
+                                    id="searchInputMain" 
+                                    placeholder="جستجوی موزیک، خواننده یا آلبوم..."
+                                    autocomplete="off"
+                                >
+                                <button id="searchBtnMain" class="btn btn-primary btn-search-submit">جستجو</button>
+                            </div>
+                        </div>
+                        
+                        <!-- Loading Indicator for Search -->
+                        <div id="searchLoadingIndicator" class="search-loading" style="display: none;">
+                            <div class="spinner"></div>
+                            <p>در حال جستجو...</p>
+                        </div>
+                        
+                        <div id="searchHistory" class="search-history">
+                            <div class="history-header">
+                                <h3 class="history-title">جستجوهای اخیر</h3>
+                                <button id="clearSearchHistoryBtn" class="btn-history-clear" title="حذف همه" style="display: none;">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                                    <span>حذف همه</span>
+                                </button>
+                            </div>
+                            <div id="searchHistoryList" class="history-chips">
+                                <p class="empty-state">هیچ جستجویی انجام نشده است</p>
+                            </div>
+                        </div>
+                        
+                        <div id="searchResultsMain" class="results-section-main">
+                            <h3 class="results-title">نتایج جستجو</h3>
+                            <div id="resultsContainerMain" class="results-container-main">
+                            </div>
+                            <!-- Infinite Scroll Loader -->
+                            <div id="infiniteScrollLoader" class="infinite-scroll-loader" style="display: none;">
+                                <div class="spinner spinner-small"></div>
+                                <p>در حال بارگذاری...</p>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+
+                <!-- Explore Page -->
+                <div id="explorePage" class="page" style="display: none;">
+                    <div class="page-header">
+                        <div class="header-spacer"></div>
+                        <h1>اکسپلور</h1>
+                        <div class="header-spacer"></div>
+                    </div>
+                    
+                    <section class="content-section">
+                        <!-- Latest Tracks Section -->
+                        <div class="explore-section">
+                            <div class="explore-section-header">
+                                <h2 class="explore-section-title">آهنگ‌های جدید</h2>
+                            </div>
+                            <div class="explore-items-container" id="latestTracksContainer">
+                                <div class="explore-items-scroll">
+                                    <div class="explore-items-list" id="latestTracksList">
+                                        <div class="explore-loading">
+                                            <div class="spinner spinner-small"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Top Monthly Section -->
+                        <div class="explore-section">
+                            <div class="explore-section-header">
+                                <h2 class="explore-section-title">برترین‌های ماه</h2>
+                            </div>
+                            <div class="explore-items-container" id="topMonthlyContainer">
+                                <div class="explore-items-scroll">
+                                    <div class="explore-items-list" id="topMonthlyList">
+                                        <div class="explore-loading">
+                                            <div class="spinner spinner-small"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Podcasts Section -->
+                        <div class="explore-section">
+                            <div class="explore-section-header">
+                                <h2 class="explore-section-title">پادکست‌ها</h2>
+                            </div>
+                            <div class="explore-items-container" id="podcastsContainer">
+                                <div class="explore-items-scroll">
+                                    <div class="explore-items-list" id="podcastsList">
+                                        <div class="explore-loading">
+                                            <div class="spinner spinner-small"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+                
+                <!-- Explore Detail Page -->
+                <div id="exploreDetailPage" class="page" style="display: none;">
+                    <div class="page-header">
+                        <button id="backFromExploreDetailBtn" class="btn btn-icon btn-back" title="بازگشت">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
+                            </svg>
+                        </button>
+                        <h1 id="exploreDetailTitle">اکسپلور</h1>
+                        <div class="header-spacer"></div>
+                    </div>
+                    
+                    <section class="content-section">
+                        <!-- Loading Indicator for Explore Detail -->
+                        <div id="exploreDetailLoadingIndicator" class="loading loading-inline" style="display: none;">
+                            <div class="spinner spinner-small"></div>
+                            <p>در حال بارگذاری...</p>
+                        </div>
+                        <div id="exploreDetailContainer" class="results-container-main">
+                        </div>
+                        <!-- Infinite Scroll Loader -->
+                        <div id="exploreDetailInfiniteLoader" class="infinite-scroll-loader" style="display: none;">
+                            <div class="spinner spinner-small"></div>
+                            <p>در حال بارگذاری...</p>
+                        </div>
+                        <!-- Scroll to Top Button -->
+                        <button id="exploreDetailScrollToTopBtn" class="scroll-to-top-btn" style="display: none;" title="برو به بالا">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/>
+                            </svg>
+                        </button>
+                    </section>
+                </div>
+                
+                <!-- Playlists Page -->
+                <div id="playlistsPage" class="page">
+                    <div class="page-header">
+                        <div class="header-spacer"></div>
+                        <h1>پلی‌لیست‌های من</h1>
+                        <div class="header-actions">
+                            <button id="createPlaylistBtnMain" class="btn btn-primary">➕ جدید</button>
+                        </div>
+                    </div>
+                    
+                    <section class="content-section">
+                        <div id="playlistsListMain" class="playlists-list-main">
+                            <p class="empty-state">هیچ پلی‌لیستی وجود ندارد</p>
+                        </div>
+                    </section>
+                </div>
+
+                <!-- Playlist Detail Page -->
+                <div id="playlistDetailPage" class="page" style="display: none;">
+                    <div class="page-header">
+                        <button id="backToPlaylistsBtn" class="btn btn-icon btn-back" title="بازگشت">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
+                            </svg>
+                        </button>
+                        <h1 id="playlistDetailTitle">پلی‌لیست</h1>
+                        <div class="header-actions" id="playlistDetailActions">
+                            <button id="playlistExportBtn" class="btn btn-secondary btn-small btn-touch" type="button" title="خروجی">خروجی</button>
+                            <label for="playlistImportInput" class="btn btn-secondary btn-small btn-touch" id="playlistImportLabel" title="ورودی" style="display:none;">ورودی</label>
+                            <input type="file" id="playlistImportInput" accept=".json,application/json,text/plain" style="display:none">
+                        </div>
+                    </div>
+                    
+                    <section class="content-section">
+                        <div id="playlistTracksContainer" class="playlist-tracks-container">
+                            <p class="empty-state">در حال بارگذاری...</p>
+                        </div>
+                    </section>
+                </div>
+
+                <!-- Settings Page -->
+                <div id="settingsPage" class="page" style="display: none;">
+                    <div class="page-header">
+                        <div class="header-left">
+                            <button id="settingsHardRefreshBtn" class="btn btn-secondary" title="بارگذاری مجدد بدون کش (مثل Ctrl+F5)">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                                </svg>
+                                <span>بارگذاری</span>
+                            </button>
+                        </div>
+                        <h1>تنظیمات</h1>
+                        <div class="header-right">
+                            <button id="settingsResetAllBtn" class="btn btn-danger" title="ریست کامل و پاک کردن کش">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                                </svg>
+                                <span>ریست</span>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <section class="content-section">
+                        <div class="settings-section">
+                            <h3 class="settings-section-title">حافظه و کش آهنگ</h3>
+                            <div class="settings-stats-card">
+                                <div class="settings-stat-item">
+                                    <span class="settings-stat-label">تعداد آهنگ‌های کش شده</span>
+                                    <span id="settingsCachedCount" class="settings-stat-value">-</span>
+                                </div>
+                                <div class="settings-stat-item">
+                                    <span class="settings-stat-label">حجم کش آهنگ</span>
+                                    <span id="settingsCacheSize" class="settings-stat-value">-</span>
+                                </div>
+                                <div class="settings-stat-item">
+                                    <span class="settings-stat-label">کل فضای استفاده شده (اپ)</span>
+                                    <span id="settingsTotalStorage" class="settings-stat-value">-</span>
+                                </div>
+                                <button id="settingsRefreshStatsBtn" class="btn btn-secondary btn-refresh-stats">بروزرسانی</button>
+                            </div>
+                            <p class="settings-hint">آهنگ‌ها هنگام پخش به صورت خودکار کش می‌شوند.</p>
+                            <p id="settingsCacheHint" class="settings-hint settings-cache-hint" style="display: none;"></p>
+                        </div>
+                    </section>
+                </div>
+
+                <!-- Player Page -->
+                <div id="playerPage" class="page" style="display: none;">
+                    <div class="page-header">
+                        <button id="backFromPlayerBtn" class="btn btn-icon btn-back" title="بازگشت">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
+                            </svg>
+                        </button>
+                        <h1>در حال پخش</h1>
+                        <div class="header-actions">
+                            <button id="shareStoryBtn" class="btn btn-icon" title="استوری اینستاگرام">
+                                <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
+                                </svg>
+                            </button>
+                            <button id="shareTrackBtn" class="btn btn-icon" title="اشتراک‌گذاری">
+                                <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <section class="player-section" id="playerSection">
+                        <div class="now-playing">
+                            <div class="current-track-image">
+                                <img id="currentTrackImage" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23b3b3b3'%3E%3Cpath d='M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z'/%3E%3C/svg%3E" alt="Track Cover">
+                            </div>
+                            <div class="track-info">
+                                <div class="track-title-wrap">
+                                    <span id="currentTrack" class="track-title-text">-</span>
+                                </div>
+                                <div class="track-artist-wrap">
+                                    <span id="currentArtist" class="track-artist-text">-</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="audio-player-wrapper">
+                            <div class="player-wrapper-action-buttons">
+                                <button id="playerPageLyricsBtn" class="btn-action-icon" title="متن آهنگ">
+                                    <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                                        <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 14H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
+                                    </svg>
+                                </button>
+                                <button id="playerPageAddBtn" class="btn-action-icon" title="اضافه به پلی‌لیست">
+                                    <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                                        <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                                    </svg>
+                                </button>
+                                <button id="playerPageFavoriteBtn" class="btn-action-icon btn-favorite" title="علاقه‌مندی‌ها">
+                                    <svg class="heart-icon" width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                                        <path d="M16.5 3c-1.74 0-3.41.81-4.5 2.09C10.91 3.81 9.24 3 7.5 3 4.42 3 2 5.42 2 8.5c0 3.78 3.4 6.86 8.55 11.54L12 21.35l1.45-1.32C18.6 15.36 22 12.28 22 8.5 22 5.42 19.58 3 16.5 3z"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <div class="player-wrapper-progress-container" id="playerPageProgressContainer">
+                                <div class="player-wrapper-progress-track" id="playerPageProgressTrack">
+                                    <div class="player-wrapper-progress-fill" id="playerPageProgressFill"></div>
+                                    <div class="player-wrapper-progress-handle" id="playerPageProgressHandle"></div>
+                                </div>
+                            </div>
+                            <audio id="audioPlayer" class="audioPlayer" controls></audio>
+                        </div>
+                        
+                        <div class="player-controls">
+                            <button id="shuffleBtn" class="btn btn-icon" title="Shuffle">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/>
+                                </svg>
+                            </button>
+                            <button id="nextBtn" class="btn btn-icon" title="Next">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/>
+                                </svg>
+                            </button>
+                            <button id="playPauseBtn" class="btn btn-icon btn-large" title="Play/Pause">
+                                <svg id="playIcon" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" style="display: block;">
+                                    <path d="M8 5v14l11-7z"/>
+                                </svg>
+                                <svg id="pauseIcon" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
+                                    <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/>
+                                </svg>
+                            </button>
+                            <button id="prevBtn" class="btn btn-icon" title="Previous">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/>
+                                </svg>
+                            </button>
+                            <button id="repeatBtn" class="btn btn-icon" title="Repeat">
+                                <svg id="repeatOffIcon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" style="display: block;">
+                                    <path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/>
+                                </svg>
+                                <svg id="repeatOneIcon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
+                                    <path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4zm-4-2V9h-1l-2 1v1h1.5v4H13z"/>
+                                </svg>
+                                <svg id="repeatAllIcon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
+                                    <path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </div>
+
+        <!-- Global Loading Overlay -->
+        <div id="loadingIndicator" class="loading-overlay" style="display: none;">
+            <div class="loading-overlay-content">
+                <div class="spinner"></div>
+                <p>در حال بارگذاری آهنگ...</p>
+            </div>
+        </div>
+
+        <!-- Offline Indicator -->
+        <div id="offlineIndicator" class="offline-indicator" style="display: none;">
+            <span>آفلاین - فقط آهنگ‌های کش‌شده در دسترس هستند</span>
+        </div>
+
+        <!-- Toast Notification -->
+        <div id="toastContainer" class="toast-container"></div>
+
+        <!-- Bottom Navigation Bar (Fixed) -->
+        <nav class="bottom-nav">
+            <button class="nav-item active" data-page="home">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+                </svg>
+                <span>خانه</span>
+            </button>
+            <button class="nav-item" data-page="search">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+                </svg>
+                <span>جستجو</span>
+            </button>
+            <button class="nav-item" data-page="explore">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2L4.5 20.29 5.21 21 12 18l6.79 3 .71-.71zM12 4.84L16.95 18H7.05z"/>
+                </svg>
+                <span>اکسپلور</span>
+            </button>
+            <button class="nav-item" data-page="playlists">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v14.18L14.73 18l-1.46 1.46L17 22.36l3.73-2.9L19.27 18 17 20.18V6z"/>
+                </svg>
+                <span>پلی‌لیست‌ها</span>
+            </button>
+            <button class="nav-item" data-page="settings">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+                </svg>
+                <span>تنظیمات</span>
+            </button>
+        </nav>
+
+        <!-- Bottom Player Bar (Fixed) -->
+        <div class="bottom-player-bar" id="bottomPlayerBar" style="display: none;">
+            <!-- Progress Bar -->
+            <div class="player-bar-progress-container" id="playerBarProgressContainer">
+                <div class="player-bar-progress-track" id="playerBarProgressTrack">
+                    <div class="player-bar-progress-fill" id="playerBarProgressFill"></div>
+                    <div class="player-bar-progress-handle" id="playerBarProgressHandle"></div>
+                </div>
+            </div>
+            <div class="player-bar-content">
+                <!-- Left Controls: Next, Play/Pause, Prev -->
+                <div class="player-bar-left-controls">
+                    <button id="playerBarNext" class="btn-bar-icon" title="بعدی">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/>
+                        </svg>
+                    </button>
+                    <button id="playerBarPlayPause" class="btn-bar-icon btn-bar-play" title="پخش/توقف">
+                        <svg id="playerBarPlayIcon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M8 5v14l11-7z"/>
+                        </svg>
+                        <svg id="playerBarPauseIcon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
+                            <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/>
+                        </svg>
+                    </button>
+                    <button id="playerBarPrev" class="btn-bar-icon" title="قبلی">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/>
+                        </svg>
+                    </button>
+                </div>
+                
+                <!-- Center: Track Info -->
+                <div class="player-bar-track" id="playerBarTrack">
+                    <img id="playerBarImage" src="" alt="Track">
+                    <div class="player-bar-info">
+                        <div class="player-bar-title-wrap">
+                            <span id="playerBarTitle" class="player-bar-title-text">-</span>
+                        </div>
+                        <div class="player-bar-artist-wrap">
+                            <span id="playerBarArtist" class="player-bar-artist-text">-</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Right Controls: Favorite, Repeat, Shuffle -->
+                <div class="player-bar-right-controls">
+                    <button id="playerBarFavoriteBtn" class="btn-bar-icon btn-bar-favorite" title="علاقه‌مندی‌ها">
+                        <svg class="heart-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+                        </svg>
+                    </button>
+                    <button id="playerBarRepeat" class="btn-bar-icon" title="تکرار">
+                        <svg id="playerBarRepeatOffIcon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/>
+                        </svg>
+                        <svg id="playerBarRepeatOneIcon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
+                            <path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4zm-4-2V9h-1l-2 1v1h1.5v4H13z"/>
+                        </svg>
+                        <svg id="playerBarRepeatAllIcon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
+                            <path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/>
+                        </svg>
+                    </button>
+                    <button id="playerBarShuffle" class="btn-bar-icon" title="تصادفی">
+                        <svg id="playerBarShuffleOffIcon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/>
+                        </svg>
+                        <svg id="playerBarShuffleOnIcon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
+                            <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Error Message -->
+        <div id="errorMessage" class="error-message" style="display: none;">
+            <span id="errorMessageText"></span>
+            <button id="errorRetryBtn" class="btn btn-secondary btn-retry" style="display: none;">تلاش مجدد</button>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+    <script>
+        // Register Service Worker
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('service-worker.js')
+                    .then(reg => {
+                        console.log('Service Worker registered');
+                        // Check for updates
+                        reg.update();
+                    })
+                    .catch(err => console.log('Service Worker registration failed', err));
+            });
+        }
+    </script>
+</body>
+</html>
+
