@@ -359,6 +359,41 @@ body {
     padding-top: 0;
 }
 
+/* Search source tabs (Tehran / Melovaz) */
+.search-source-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    padding: 0 4px;
+}
+.search-source-tab {
+    flex: 1;
+    padding: 10px 16px;
+    border: 1px solid var(--border-color);
+    border-radius: 500px;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+.search-source-tab:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+.search-source-tab.active {
+    background: var(--spotify-green);
+    color: #000;
+    border-color: var(--spotify-green);
+}
+.search-source-tab[aria-selected="true"] {
+    background: var(--spotify-green);
+    color: #000;
+    border-color: var(--spotify-green);
+}
+
 .search-box-wrapper {
     margin-bottom: 28px;
 }
@@ -2884,8 +2919,18 @@ header h1 {
 }
 
 .track-item.active {
-    background: linear-gradient(135deg, rgba(29, 185, 84, 0.1) 0%, var(--bg-card) 100%);
+    background: linear-gradient(135deg, rgba(29, 185, 84, 0.15) 0%, var(--bg-card) 100%);
     border-color: var(--spotify-green);
+    box-shadow: 0 0 0 2px rgba(29, 185, 84, 0.35), var(--shadow-card);
+}
+
+.track-item.active .track-image::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 8px;
+    box-shadow: inset 0 0 0 3px var(--spotify-green);
+    pointer-events: none;
 }
 
 .track-image {

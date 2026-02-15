@@ -1,5 +1,10 @@
 // xPlayer - Main Application Logic
 
+const SEARCH_SOURCES = {
+    tehran: 'tehran',
+    melovaz: 'melovaz'
+};
+
 class MusicPlayer {
     constructor() {
         this.playlist = [];
@@ -10,6 +15,7 @@ class MusicPlayer {
         this.searchResults = [];
         this.currentSearchQuery = '';
         this.currentSearchPage = 1;
+        this.currentSearchSource = SEARCH_SOURCES.tehran;
         this.isLoadingMore = false;
         this.hasMoreResults = true;
         this.customPlaylists = {}; // Initialize customPlaylists
@@ -290,6 +296,19 @@ class MusicPlayer {
         if (clearSearchHistoryBtn) {
             clearSearchHistoryBtn.addEventListener('click', () => this.clearSearchHistory());
         }
+        document.querySelectorAll('.search-source-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                const source = tab.dataset.source;
+                if (source !== SEARCH_SOURCES.tehran && source !== SEARCH_SOURCES.melovaz) return;
+                this.currentSearchSource = source;
+                document.querySelectorAll('.search-source-tab').forEach(t => {
+                    t.classList.toggle('active', t.dataset.source === source);
+                    t.setAttribute('aria-selected', t.dataset.source === source ? 'true' : 'false');
+                });
+                this.searchResults = [];
+                this.displaySearchResultsMain(this.searchResults, true);
+            });
+        });
 
         // Playlists Page
         if (this.createPlaylistBtnMain) {
@@ -883,6 +902,536 @@ class MusicPlayer {
         }
     }
 
+    async fetchSearchResultsMelovaz(query, page = 1) {
+        const searchUrl = `https://melovaz.ir/?s=${encodeURIComponent(query)}${page > 1 ? `&paged=${page}` : ''}`;
+        let htmlContent = '';
+        const enc = encodeURIComponent(searchUrl);
+        const proxies = [
+            async () => {
+                const res = await fetch(`https://corsproxy.io/?${enc}`, { mode: 'cors' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                return await res.text();
+            },
+            async () => {
+                const res = await fetch(`https://api.allorigins.win/raw?url=${enc}`, { mode: 'cors' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                return await res.text();
+            },
+            async () => {
+                const res = await fetch(`https://api.allorigins.win/get?url=${enc}`, { mode: 'cors' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                return (data && data.contents) ? data.contents : '';
+            },
+            async () => {
+                const res = await fetch(`https://api.codetabs.com/v1/proxy?quest=${enc}`, { mode: 'cors' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                return await res.text();
+            }
+        ];
+        for (const fn of proxies) {
+            try {
+                htmlContent = await fn();
+                if (htmlContent && htmlContent.length > 500) break;
+            } catch (e) {
+                console.warn('Melovaz proxy attempt failed:', e);
+            }
+        }
+        if (!htmlContent) throw new Error('نتوانستیم صفحه جستجوی ملواز را بارگذاری کنیم.');
+        return this.parseSearchResultsMelovaz(htmlContent, query, page);
+    }
+
+    parseSearchResultsMelovaz(html, query, page = 1) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const results = [];
+        const baseUrl = 'https://melovaz.ir';
+        const blockedPathParts = ['about', 'contact', 'darbare', 'tamas', 'raahnaamaa', 'raahnamaa', 'guide', 'faq', 'privacy', 'terms', 'قوانین', 'حریم', 'تماس', 'درباره', 'راهنما', 'ورود', 'ثبت', 'login', 'register'];
+        const blockedTitles = ['درباره ملواز', 'تماس با ما', 'راهنما و آموزش ها', 'راهنما', 'درباره ما', 'ورود', 'ثبت نام', 'خانه', 'صفحه اصلی', 'about', 'contact'];
+        const isBlockedTitle = (title) => {
+            if (!title) return true;
+            const t = title.trim();
+            return blockedTitles.some(b => t === b || t.includes(b));
+        };
+        const isContentUrl = (href) => {
+            if (!href || href === baseUrl || href === baseUrl + '/') return false;
+            if (href.includes('/?s=') || href.includes('/category/') || href.includes('/tag/') ||
+                href.includes('/author/') || href.includes('/page/') || href.includes('/wp-')) return false;
+            try {
+                const u = new URL(href.startsWith('http') ? href : baseUrl + (href.startsWith('/') ? href : '/' + href));
+                const path = (u.pathname || '').replace(/^\/|\/$/g, '').toLowerCase();
+                if (path.length < 5) return false;
+                if (path.startsWith('category') || path.startsWith('tag')) return false;
+                if (blockedPathParts.some(part => path.includes(part))) return false;
+                return true;
+            } catch (_) { return false; }
+        };
+        const normalizeUrl = (href) => {
+            const h = (href || '').trim().replace(/#.*$/, '');
+            return h.startsWith('http') ? h : (h.startsWith('/') ? baseUrl + h : baseUrl + '/' + h);
+        };
+        const toFullUrl = (href) => {
+            const h = (href || '').trim();
+            return h.startsWith('http') ? h : (h.startsWith('/') ? baseUrl + h : baseUrl + '/' + h);
+        };
+
+        const genericTitlePattern = /^(تک\s*آهنگ|آلبوم|پلی\s*لیست|single|album|playlist)$/i;
+        const isGenericTitle = (t) => !t || genericTitlePattern.test(t.trim());
+
+        // ساختار ملواز: article.postbox-i > post-img-hover > a, و section.postinfo > ul > li.index-al (عنوان), li.index-ar (خواننده)
+        const articles = doc.querySelectorAll('article.postbox-i, .postbox-i, section.box-i article, section.box-i .postbox-i');
+        const seenUrls = new Set();
+        (articles.length ? articles : doc.querySelectorAll('article')).forEach((articleEl, index) => {
+            const container = articleEl;
+            const a = container.querySelector('a[href*="melovaz.ir"]');
+            if (!a) return;
+            const href = a.getAttribute('href') || a.href;
+            if (!isContentUrl(href)) return;
+            const fullUrl = toFullUrl(href);
+            const norm = fullUrl.replace(/#.*$/, '');
+            if (seenUrls.has(norm)) return;
+            seenUrls.add(norm);
+
+            const liAl = container.querySelector('li.index-al');
+            const liAr = container.querySelector('li.index-ar');
+            let title = liAl ? (liAl.textContent || '').trim().replace(/\s+/g, ' ') : '';
+            let artist = liAr ? (liAr.textContent || '').trim().replace(/\s+/g, ' ') : '';
+            if (isGenericTitle(title)) {
+                const img = container.querySelector('img');
+                if (img && img.alt) title = (img.alt || '').trim().replace(/\s+/g, ' ').slice(0, 200);
+            }
+            if (!title && container.querySelector('img')?.alt) title = (container.querySelector('img').alt || '').trim().slice(0, 200);
+            if (!title || title.length < 2 || isBlockedTitle(title)) return;
+            if (!artist) artist = 'ملواز';
+
+            const tsaleEl = container.querySelector('span.TSale');
+            const tsaleText = tsaleEl ? (tsaleEl.textContent || '').trim() : '';
+            const isAlbumOrPlaylist = /آلبوم|پلی\s*لیست|album|playlist/i.test(tsaleText);
+            const isAlbum = /آلبوم|album/i.test(tsaleText);
+            let displayTitle = title.slice(0, 200);
+            if (isAlbum && displayTitle && !displayTitle.startsWith('آلبوم:')) displayTitle = 'آلبوم: ' + displayTitle;
+
+            const img = container.querySelector('img');
+            let image = img ? (img.src || img.getAttribute('src') || '') : '';
+            if (image && !image.startsWith('http')) image = image.startsWith('/') ? baseUrl + image : baseUrl + '/' + image;
+
+            results.push({
+                id: 'melovaz-' + (page - 1) * 100 + index,
+                title: displayTitle,
+                artist: artist,
+                url: fullUrl,
+                pageUrl: fullUrl,
+                image: image || '',
+                source: 'melovaz',
+                isAlbumOrPlaylist: isAlbumOrPlaylist
+            });
+        });
+
+        if (results.length === 0) {
+            const main = doc.querySelector('main, #main, .site-main, #content, .content, .page-content, .search-results') || doc.body;
+            const itemSelectors = 'article, .post, .hentry, .search-result, .type-post, .type-album, .type-playlist, [class*="type-"]';
+            const items = main ? main.querySelectorAll(itemSelectors) : doc.querySelectorAll(itemSelectors);
+            items.forEach((el, index) => {
+                const linkEl = el.querySelector('.entry-title a, h2 a, h3 a, h1 a, .post-title a, a[rel="bookmark"], .title a');
+                const a = linkEl || el.querySelector('a[href*="melovaz.ir"]');
+                if (!a) return;
+                const href = a.getAttribute('href') || a.href;
+                if (!isContentUrl(href)) return;
+                const fullUrl = toFullUrl(href);
+                const norm = fullUrl.replace(/#.*$/, '');
+                if (seenUrls.has(norm)) return;
+                seenUrls.add(norm);
+                let title = (a.textContent || '').trim().replace(/\s+/g, ' ');
+                const titleNode = el.querySelector('.entry-title, h2, h3, .post-title, .title');
+                if ((!title || title === 'پلی لیست' || title === 'آلبوم') && titleNode) title = (titleNode.textContent || '').trim().replace(/\s+/g, ' ');
+                if (!title) title = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+                if (!title || title.length < 2 || isBlockedTitle(title)) return;
+                const img = el.querySelector('img');
+                let image = img ? (img.src || img.getAttribute('src') || '') : '';
+                if (image && !image.startsWith('http')) image = image.startsWith('/') ? baseUrl + image : baseUrl + '/' + image;
+                const artistEl = el.querySelector('.artist a, .byline a, [rel="author"], .entry-meta a');
+                const artist = artistEl ? (artistEl.textContent || '').trim() : 'ملواز';
+                results.push({
+                    id: 'melovaz-f-' + index + '-' + (page - 1) * 500,
+                    title: title.slice(0, 200),
+                    artist: artist || 'ملواز',
+                    url: fullUrl,
+                    pageUrl: fullUrl,
+                    image: image || '',
+                    source: 'melovaz',
+                    isAlbumOrPlaylist: true
+                });
+            });
+        }
+
+        if (results.length === 0) {
+            const main = doc.querySelector('main, #main, .site-main, #content, .content, .page-content, .search-results') || doc.body;
+            const allLinks = main ? main.querySelectorAll('a[href*="melovaz.ir"]') : doc.querySelectorAll('a[href*="melovaz.ir"]');
+            allLinks.forEach((a, i) => {
+                const href = a.getAttribute('href') || a.href;
+                if (!isContentUrl(href)) return;
+                const fullUrl = toFullUrl(href);
+                const norm = fullUrl.replace(/#.*$/, '');
+                if (seenUrls.has(norm)) return;
+                seenUrls.add(norm);
+                let title = (a.textContent || '').trim().replace(/\s+/g, ' ');
+                const parent = a.closest('article, .post, .hentry, .entry, li');
+                if ((!title || title.length < 3 || title === 'پلی لیست' || title === 'آلبوم') && parent) {
+                    const t = parent.querySelector('.entry-title, h2, h3, .title');
+                    if (t) title = (t.textContent || '').trim().replace(/\s+/g, ' ');
+                }
+                if (!title || title.length < 2) title = 'نتیجه ' + (results.length + 1);
+                if (isBlockedTitle(title)) return;
+                results.push({
+                    id: 'melovaz-f-' + i + '-' + (page - 1) * 500,
+                    title: title.slice(0, 200),
+                    artist: 'ملواز',
+                    url: fullUrl,
+                    pageUrl: fullUrl,
+                    image: '',
+                    source: 'melovaz',
+                    isAlbumOrPlaylist: true
+                });
+            });
+        }
+
+        let hasMore = doc.querySelector('a.next.page-numbers, .nav-links a.next, a[rel="next"], .pagination a.next, .pagination .next, .page-nav a[rel="next"], link[rel="next"]') !== null;
+        if (!hasMore) {
+            const nextLink = doc.querySelector('a[href*="paged=2"], a[href*="page/2"], .page-numbers li:not(.current) a');
+            if (nextLink) hasMore = true;
+        }
+        if (!hasMore && results.length >= 6) {
+            hasMore = true;
+        }
+        return { results, hasMore, page };
+    }
+
+    async loadMelovazAlbumAndPlay(albumTrack) {
+        const pageUrl = albumTrack.url || albumTrack.pageUrl;
+        if (!pageUrl || !pageUrl.includes('melovaz.ir')) return;
+        this.showLoading(true);
+        try {
+            const encoded = encodeURIComponent(pageUrl);
+            const proxyFetchers = [
+                () => fetch(`https://corsproxy.io/?${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.text() : Promise.reject(new Error(r.status))),
+                () => fetch(`https://api.allorigins.win/raw?url=${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.text() : Promise.reject(new Error(r.status))),
+                () => fetch(`https://api.allorigins.win/get?url=${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.json() : Promise.reject(new Error(r.status))).then(d => (d && d.contents) || ''),
+                () => fetch(`https://api.codetabs.com/v1/proxy?quest=${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.text() : Promise.reject(new Error(r.status))),
+                () => fetch(`https://api.cors.lol/?url=${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.json() : Promise.reject(new Error(r.status))).then(d => (d && d.contents) || (typeof d === 'string' ? d : ''))
+            ];
+            let html = '';
+            for (let i = 0; i < proxyFetchers.length; i++) {
+                try {
+                    html = await proxyFetchers[i]();
+                    if (html && html.length > 500) break;
+                } catch (e) {
+                    console.warn('loadMelovazAlbumAndPlay proxy', i + 1, 'failed:', e.message);
+                }
+            }
+            if (!html || html.length < 200) throw new Error('نتوانستیم صفحه را بارگذاری کنیم');
+            const tracks = this.parseMelovazAlbumPage(html, pageUrl, albumTrack);
+            if (tracks.length > 0) {
+                this.playlist = tracks;
+                this.currentIndex = 0;
+                this.shuffledIndices = [];
+                this.updatePlaylistDisplay();
+                this.loadAndPlay(tracks[0]);
+            } else {
+                const single = { id: 'melovaz-single', title: albumTrack.title, artist: albumTrack.artist, url: pageUrl, pageUrl, image: albumTrack.image || '', source: 'melovaz' };
+                this.playlist = [single];
+                this.currentIndex = 0;
+                this.updatePlaylistDisplay();
+                this.loadAndPlay(single);
+            }
+        } catch (e) {
+            console.error('loadMelovazAlbumAndPlay error:', e);
+            this.showError('خطا در بارگذاری آلبوم ملواز.', { retry: () => this.loadMelovazAlbumAndPlay(albumTrack) });
+        } finally {
+            this.showLoading(false);
+        }
+    }
+
+    async openMelovazAlbumDetail(albumTrack) {
+        const pageUrl = albumTrack.url || albumTrack.pageUrl;
+        if (!pageUrl || !pageUrl.includes('melovaz.ir')) return;
+        this.navigateToPage('exploreDetail');
+        if (this.exploreDetailTitle) this.exploreDetailTitle.textContent = albumTrack.title || 'آلبوم ملواز';
+        if (this.exploreDetailLoadingIndicator) this.exploreDetailLoadingIndicator.style.display = 'flex';
+        if (this.exploreDetailContainer) this.exploreDetailContainer.innerHTML = '';
+        if (this.exploreDetailInfiniteLoader) this.exploreDetailInfiniteLoader.style.display = 'none';
+        this.isDirectoryPlaylist = true;
+        const encoded = encodeURIComponent(pageUrl);
+        const proxyFetchers = [
+            () => fetch(`https://corsproxy.io/?${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.text() : Promise.reject(new Error(r.status))),
+            () => fetch(`https://api.allorigins.win/raw?url=${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.text() : Promise.reject(new Error(r.status))),
+            () => fetch(`https://api.allorigins.win/get?url=${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.json() : Promise.reject(new Error(r.status))).then(d => (d && d.contents) || ''),
+            () => fetch(`https://api.codetabs.com/v1/proxy?quest=${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.text() : Promise.reject(new Error(r.status))),
+            () => fetch(`https://api.cors.lol/?url=${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.json() : Promise.reject(new Error(r.status))).then(d => (d && d.contents) || (typeof d === 'string' ? d : ''))
+        ];
+        let html = '';
+        for (let i = 0; i < proxyFetchers.length; i++) {
+            try {
+                html = await proxyFetchers[i]();
+                if (html && html.length > 500) break;
+            } catch (e) {
+                console.warn('openMelovazAlbumDetail proxy', i + 1, 'failed:', e.message);
+            }
+        }
+        if (this.exploreDetailLoadingIndicator) this.exploreDetailLoadingIndicator.style.display = 'none';
+        if (!html || html.length < 200) {
+            this.showError('خطا در بارگذاری آلبوم ملواز.', { retry: () => this.openMelovazAlbumDetail(albumTrack) });
+            if (this.exploreDetailContainer) this.exploreDetailContainer.innerHTML = '<div class="explore-loading"><p>خطا در بارگذاری. لطفاً دوباره تلاش کنید.</p></div>';
+            return;
+        }
+        const tracks = this.parseMelovazAlbumPage(html, pageUrl, albumTrack);
+        if (tracks.length > 0) {
+            this.playlist = tracks;
+            this.currentIndex = -1;
+            this.currentPlaylistId = null;
+            this.savePlaylist();
+            if (this.exploreDetailContainer) {
+                this.exploreDetailContainer.innerHTML = '';
+                tracks.forEach(track => {
+                    const trackEl = this.createTrackElement(track, 'explore');
+                    this.exploreDetailContainer.appendChild(trackEl);
+                });
+            }
+            this.showToast(`آلبوم با ${tracks.length} آهنگ بارگذاری شد. برای پخش روی آهنگ مورد نظر کلیک کنید.`, 'success');
+        } else {
+            const single = { id: 'melovaz-single', title: albumTrack.title, artist: albumTrack.artist, url: pageUrl, pageUrl, image: albumTrack.image || '', source: 'melovaz' };
+            this.playlist = [single];
+            this.currentIndex = -1;
+            this.savePlaylist();
+            if (this.exploreDetailContainer) {
+                this.exploreDetailContainer.innerHTML = '';
+                const trackEl = this.createTrackElement(single, 'explore');
+                this.exploreDetailContainer.appendChild(trackEl);
+            }
+            this.showToast('یک آهنگ یافت شد. برای پخش کلیک کنید.', 'success');
+        }
+    }
+
+    parseMelovazAlbumPage(html, pageUrl, albumTrack) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const baseUrl = 'https://melovaz.ir';
+        const tracks = [];
+        const seen = new Set();
+        const blockedPathParts = ['about', 'contact', 'darbare', 'tamas', 'raahnaamaa', 'raahnamaa', 'guide', 'faq', 'privacy', 'terms', 'قوانین', 'حریم', 'تماس', 'درباره', 'راهنما', 'ورود', 'ثبت', 'login', 'register'];
+        const blockedTitles = ['درباره ملواز', 'تماس با ما', 'راهنما و آموزش ها', 'راهنما', 'درباره ما', 'ورود', 'ثبت نام', 'خانه', 'صفحه اصلی', 'about', 'contact', 'Released', 'released on', 'در بارگذاری'];
+        const isBlockedTitle = (t) => {
+            if (!t || typeof t !== 'string') return true;
+            const s = t.trim();
+            if (s.length < 2) return true;
+            if (blockedTitles.some(b => s === b || s.includes(b))) return true;
+            if (/^\.\.\.?leased\s+on\s+\d/i.test(s) || /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(s)) return true;
+            return false;
+        };
+        const isBlockedUrl = (href) => {
+            if (!href) return true;
+            try {
+                const path = (href.startsWith('http') ? href : baseUrl + (href.startsWith('/') ? href : '/' + href));
+                const pathname = new URL(path).pathname.replace(/^\/|\/$/g, '').toLowerCase();
+                return blockedPathParts.some(part => pathname.includes(part));
+            } catch (_) { return true; }
+        };
+        const addTrack = (title, artist, url, image) => {
+            if (!url || seen.has(url)) return;
+            if (isBlockedTitle(title) || isBlockedUrl(url)) return;
+            seen.add(url);
+            const uniqueSuffix = (url.split('/').pop() || url).replace(/\?.*$/, '').slice(-36) || String(url.length);
+            tracks.push({
+                id: 'melovaz-t-' + tracks.length + '-' + uniqueSuffix,
+                title: title || albumTrack.title || 'ترک',
+                artist: artist || albumTrack.artist || 'ملواز',
+                url,
+                pageUrl: url,
+                image: image || albumTrack.image || '',
+                source: 'melovaz'
+            });
+        };
+
+        // روش ۱: داده در response داخل #aramplayer > ul.audioplayer-audios > li با data-title, data-artist, data-src (داخل div زیر هر li)
+        const aramplayer = doc.querySelector('#aramplayer');
+        const audiosUl = aramplayer ? aramplayer.querySelector('ul.audioplayer-audios') : doc.querySelector('ul.audioplayer-audios');
+        if (audiosUl) {
+            const audioItems = audiosUl.querySelectorAll('li');
+            audioItems.forEach((li, i) => {
+                const elWithSrc = li.querySelector('[data-src]') || li;
+                const src = (elWithSrc.getAttribute('data-src') || '').trim();
+                if (!src) return;
+                const title = (elWithSrc.getAttribute('data-title') || li.getAttribute('data-title') || li.querySelector('[data-title]')?.getAttribute('data-title') || '').trim();
+                const artist = (elWithSrc.getAttribute('data-artist') || li.getAttribute('data-artist') || li.querySelector('[data-artist]')?.getAttribute('data-artist') || '').trim();
+                let full = src.startsWith('http') ? src : (src.startsWith('/') ? baseUrl + src : baseUrl + '/' + src);
+                try { full = new URL(full, baseUrl).href; } catch (_) {}
+                if (seen.has(full)) return;
+                seen.add(full);
+                const slug = (full.split('/').pop() || full).replace(/\?.*$/, '').slice(-40) || String(full.length);
+                tracks.push({
+                    id: 'melovaz-t-' + i + '-' + slug,
+                    title: title || albumTrack.title || 'ترک',
+                    artist: artist || albumTrack.artist || 'ملواز',
+                    url: full,
+                    pageUrl: full,
+                    image: albumTrack.image || '',
+                    source: 'melovaz'
+                });
+            });
+            if (tracks.length > 0) return tracks;
+        }
+
+        // روش ۲: ساختار DOM با li.audioplayer-track-item و لینک در .dldrop-links
+        const tracklistRoot = doc.querySelector('#aramplayer') ||
+            doc.querySelector('.aramplayer') ||
+            doc.querySelector('.audioplayer-tracklist-container') ||
+            doc.querySelector('.audioplayer-tracklist') ||
+            doc;
+        const trackItems = tracklistRoot.querySelectorAll('li.audioplayer-track-item');
+        if (trackItems.length > 0) {
+            trackItems.forEach((li, i) => {
+                const titleEl = li.querySelector('.audioplayer-item-title');
+                let title = '';
+                if (titleEl) {
+                    title = Array.from(titleEl.childNodes)
+                        .filter(n => n.nodeType === Node.TEXT_NODE)
+                        .map(n => (n.textContent || '').trim())
+                        .join('')
+                        .trim();
+                    if (!title) {
+                        let fullText = (titleEl.textContent || '').trim();
+                        const span = titleEl.querySelector('span');
+                        const artistInTitle = titleEl.querySelector('.artist-player-s');
+                        if (span) fullText = fullText.replace((span.textContent || '').trim(), '').trim();
+                        if (artistInTitle) fullText = fullText.replace((artistInTitle.textContent || '').trim(), '').trim();
+                        title = fullText.trim();
+                    }
+                }
+                const artistEl = li.querySelector('.artist-player-s');
+                const artist = artistEl ? (artistEl.textContent || '').trim() : (albumTrack.artist || 'ملواز');
+                const mp3Link = li.querySelector('.dldrop-links a[href*=".mp3"]') ||
+                    li.querySelector('.audioplayer-item-dl a[href*=".mp3"]') ||
+                    li.querySelector('.dldrop a[href*=".mp3"]') ||
+                    li.querySelector('.audioplayer-item-dl a[href*="vip-dl"]');
+                const href = mp3Link ? (mp3Link.getAttribute('href') || mp3Link.href) : '';
+                if (!href || !(href.includes('.mp3') || href.includes('vip-dl'))) return;
+                let full = href.startsWith('http') ? href : (href.startsWith('/') ? baseUrl + href : baseUrl + '/' + href);
+                try { full = new URL(full, baseUrl).href; } catch (_) {}
+                if (!title) {
+                    try {
+                        const u = new URL(full, baseUrl);
+                        let filename = u.searchParams.get('filename') || '';
+                        if (!filename && u.pathname.includes('vip-dl')) filename = (u.search || '').replace(/^\?/, '');
+                        filename = decodeURIComponent(filename).split('/').pop() || filename;
+                        const noExt = filename.replace(/\.(mp3|m4a|flac)(\?|$)/i, '').trim();
+                        const withoutNumber = noExt.replace(/^\d{1,3}\s*[-.]?\s*/, '').trim();
+                        if (withoutNumber.length > 0) title = withoutNumber;
+                    } catch (_) {}
+                }
+                if (!title) title = `ترک ${i + 1}`;
+                if (seen.has(full)) return;
+                seen.add(full);
+                const slug = (full.split('/').pop() || full).replace(/\?.*$/, '').slice(-40) || String(full.length);
+                const uniqueId = 'melovaz-t-' + i + '-' + slug;
+                tracks.push({
+                    id: uniqueId,
+                    title: title || albumTrack.title || 'ترک',
+                    artist: artist || albumTrack.artist || 'ملواز',
+                    url: full,
+                    pageUrl: full,
+                    image: albumTrack.image || '',
+                    source: 'melovaz'
+                });
+            });
+            if (tracks.length > 0) return tracks;
+        }
+
+        const root = tracklistRoot !== doc ? tracklistRoot : (
+            doc.querySelector('.audioplayer-tracklist-container') ||
+            doc.querySelector('[class*="audioplayer-tracklist"]') ||
+            doc.querySelector('.tracklist, .playlist-tracks, [class*="tracklist"]') ||
+            doc.querySelector('[id*="tracklist"], [class*="track-list"]') ||
+            doc
+        );
+
+        const norm = (u) => (u || '').trim().replace(/#.*$/, '');
+        const mp3Links = root.querySelectorAll('a[href*=".mp3"], a[href*=".m4a"], a[href*="vip-dl"]');
+        mp3Links.forEach((a, i) => {
+            const href = a.getAttribute('href') || a.href;
+            if (!href || href.toLowerCase().includes('.zip')) return;
+            if (href.includes('vip-dl') && !href.includes('.mp3') && !href.includes('.m4a')) return;
+            let full = href.startsWith('http') ? href : (href.startsWith('/') ? baseUrl + href : baseUrl + '/' + href);
+            try { full = new URL(full, baseUrl).href; } catch (_) {}
+            const row = a.closest('tr, .track, .song, li.audioplayer-track-item, li');
+            let title = (a.textContent || '').trim() || `ترک ${i + 1}`;
+            let artist = albumTrack.artist || 'ملواز';
+            if (row && row.classList && row.classList.contains('audioplayer-track-item')) {
+                title = '';
+                const titleEl = row.querySelector('.audioplayer-item-title');
+                if (titleEl) {
+                    title = Array.from(titleEl.childNodes)
+                        .filter(n => n.nodeType === Node.TEXT_NODE)
+                        .map(n => (n.textContent || '').trim())
+                        .join('')
+                        .trim();
+                    if (!title) {
+                        let fullText = (titleEl.textContent || '').trim();
+                        const span = titleEl.querySelector('span');
+                        const artistInTitle = titleEl.querySelector('.artist-player-s');
+                        if (span) fullText = fullText.replace((span.textContent || '').trim(), '').trim();
+                        if (artistInTitle) fullText = fullText.replace((artistInTitle.textContent || '').trim(), '').trim();
+                        title = fullText.trim();
+                    }
+                }
+                const artistEl = row.querySelector('.artist-player-s');
+                if (artistEl) artist = (artistEl.textContent || '').trim() || artist;
+            }
+            if (!title && full) {
+                try {
+                    const u = new URL(full, baseUrl);
+                    let filename = u.searchParams.get('filename') || '';
+                    filename = decodeURIComponent(filename).split('/').pop() || filename;
+                    const noExt = filename.replace(/\.(mp3|m4a|flac)(\?|$)/i, '').trim();
+                    const withoutNumber = noExt.replace(/^\d{1,3}\s*[-.]?\s*/, '').trim();
+                    if (withoutNumber.length > 0) title = withoutNumber;
+                } catch (_) {}
+            }
+            if (!title) title = `ترک ${i + 1}`;
+            if (row && !row.classList?.contains('audioplayer-track-item')) {
+                const artistCell = row.querySelector('.artist, .singer, [class*="artist"]');
+                if (artistCell) artist = (artistCell.textContent || '').trim() || artist;
+            }
+            addTrack(title, artist, full, '');
+        });
+
+        const tableRows = root.querySelectorAll('table tbody tr, .track-list tr, .playlist-table tr');
+        tableRows.forEach((row, i) => {
+            const link = row.querySelector('a[href*="melovaz.ir"]');
+            if (!link) return;
+            const href = link.getAttribute('href') || link.href;
+            if (!href || href.includes('/category/') || href.includes('/tag/') || norm(href) === baseUrl) return;
+            if (isBlockedUrl(href)) return;
+            const full = href.startsWith('http') ? href : (href.startsWith('/') ? baseUrl + href : baseUrl + '/' + href);
+            if (seen.has(full)) return;
+            const title = (link.textContent || '').trim() || `ترک ${i + 1}`;
+            const artistEl = row.querySelector('.artist a, .singer, [class*="artist"]');
+            const artist = artistEl ? (artistEl.textContent || '').trim() : (albumTrack.artist || 'ملواز');
+            addTrack(title, artist, full, '');
+        });
+
+        const listLinks = root.querySelectorAll('.track a, .song a, .playlist-item a, li a[href*="melovaz.ir"]');
+        listLinks.forEach((a, i) => {
+            const href = a.getAttribute('href') || a.href;
+            if (!href || href.includes('/category/') || href.includes('/tag/') || href.includes('.zip')) return;
+            if (isBlockedUrl(href)) return;
+            const full = href.startsWith('http') ? href : (href.startsWith('/') ? baseUrl + href : baseUrl + '/' + href);
+            if (seen.has(full)) return;
+            const title = (a.textContent || '').trim() || `ترک ${i + 1}`;
+            addTrack(title, albumTrack.artist || 'ملواز', full, '');
+        });
+
+        return tracks;
+    }
+
     parseSearchResults(html, query, page = 1) {
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
@@ -986,7 +1535,8 @@ class MusicPlayer {
                     title: title.trim(),
                     artist: finalArtist.trim() || 'ناشناس',
                     url: url, // Direct music URL from data-music if available, otherwise page URL
-                    image: image || ''
+                    image: image || '',
+                    source: 'tehran'
                 };
                 
                 // Store page URL separately if we have direct music URL
@@ -1086,6 +1636,23 @@ class MusicPlayer {
         });
     }
 
+    getCurrentTrack() {
+        if (this.currentIndex < 0) return null;
+        if (this.playlist && this.playlist[this.currentIndex]) return this.playlist[this.currentIndex];
+        if (this.currentTrackData) return this.currentTrackData;
+        return null;
+    }
+
+    isTrackCurrentlyPlaying(track) {
+        const current = this.getCurrentTrack();
+        if (!current) return false;
+        if (String(current.id) === String(track.id)) return true;
+        const curUrl = (current.url || current.pageUrl || '').trim();
+        const trUrl = (track.url || track.pageUrl || '').trim();
+        if (curUrl && trUrl && this.normalizeUrl(curUrl) === this.normalizeUrl(trUrl)) return true;
+        return false;
+    }
+
     createTrackElement(track, source = 'playlist', index = null) {
         const div = document.createElement('div');
         div.className = 'track-item';
@@ -1101,12 +1668,8 @@ class MusicPlayer {
             div.dataset.trackUrl = this.normalizeUrl(trackUrlKey);
         }
 
-        // Check if this track is currently playing
-        const isCurrentlyPlaying = source !== 'results' && 
-                                   this.currentIndex >= 0 && 
-                                   this.playlist[this.currentIndex] && 
-                                   this.playlist[this.currentIndex].id === track.id;
-        
+        // در همه صفحات (جستجو، پلی‌لیست، اکسپلور، خانه): اگر این ترک الان در حال پخش است، حالت انتخاب‌شده
+        const isCurrentlyPlaying = this.isTrackCurrentlyPlaying(track);
         if (isCurrentlyPlaying) {
             div.classList.add('active');
         }
@@ -1206,34 +1769,43 @@ class MusicPlayer {
                 const trackIdStr = btn.dataset.trackId;
                 
                 if (action === 'toggle-favorite') {
-                    // For home and explore, use track object directly
                     if (source === 'home' || source === 'explore') {
                         this.toggleFavoriteByTrack(track);
                         this.updateFavoriteButtons(track);
                     } else {
                         if (!trackIdStr) return;
-                        const trackId = parseInt(trackIdStr);
-                        if (isNaN(trackId)) return;
-                        this.toggleFavorite(trackId);
-                        this.updateFavoriteButtons(track);
+                        const found = this.searchResults.find(t => String(t.id) === String(trackIdStr));
+                        if (found) {
+                            this.toggleFavoriteByTrack(found);
+                            this.updateFavoriteButtons(found);
+                        } else {
+                            const trackId = parseInt(trackIdStr, 10);
+                            if (!isNaN(trackId)) {
+                                this.toggleFavorite(trackId);
+                                this.updateFavoriteButtons(track);
+                            }
+                        }
                     }
                 } else if (action === 'add-to-custom') {
-                    // Pass track object directly instead of trackId for home/explore
                     if (source === 'home' || source === 'explore') {
                         this.showAddToPlaylistDialog(null, track);
                     } else {
                         if (!trackIdStr) return;
-                        const trackId = parseInt(trackIdStr);
-                        if (isNaN(trackId)) return;
-                        this.showAddToPlaylistDialog(trackId);
+                        const found = this.searchResults.find(t => String(t.id) === String(trackIdStr));
+                        if (found) {
+                            this.showAddToPlaylistDialog(found.id, found);
+                        } else {
+                            const trackId = parseInt(trackIdStr, 10);
+                            if (!isNaN(trackId)) this.showAddToPlaylistDialog(trackId);
+                        }
                     }
                 } else if (action === 'play') {
                     if (source === 'playlist-detail') {
                         if (!trackIdStr) return;
-                        const trackId = parseInt(trackIdStr);
-                        if (isNaN(trackId)) return;
-                        // Find track index in current playlist
-                        const trackIndex = this.playlist.findIndex(t => t.id === trackId);
+                        const trackIdNum = parseInt(trackIdStr, 10);
+                        const trackIndex = !isNaN(trackIdNum)
+                            ? this.playlist.findIndex(t => t.id === trackIdNum)
+                            : this.playlist.findIndex(t => String(t.id) === String(trackIdStr));
                         if (trackIndex !== -1) {
                             this.currentIndex = trackIndex;
                             this.loadAndPlay(this.playlist[trackIndex]);
@@ -1248,7 +1820,7 @@ class MusicPlayer {
                         // - اگر پلی‌لیست دایرکتوری لود شده (isDirectoryPlaylist)، بر اساس id در this.playlist پیدا کن
                         // - در غیر این صورت، مستقیماً از خود آبجکت track پخش کن
                         if (this.isDirectoryPlaylist && this.playlist && this.playlist.length > 0) {
-                            const trackIndex = this.playlist.findIndex(t => t.id === track.id);
+                            const trackIndex = this.playlist.findIndex(t => String(t.id) === String(track.id));
                             if (trackIndex !== -1) {
                                 this.currentIndex = trackIndex;
                                 this.loadAndPlay(this.playlist[trackIndex]);
@@ -1261,6 +1833,20 @@ class MusicPlayer {
                     } else if (source === 'home') {
                         // For home page (recent tracks), play directly from track object
                         this.loadAndPlay(track);
+                    } else if (source === 'results') {
+                        // آلبوم و پلی‌لیست ملواز: باز کردن صفحه جزئیات و نمایش لیست آهنگ‌ها (مثل برترین‌ها)
+                        if (track && track.source === 'melovaz' && track.isAlbumOrPlaylist) {
+                            this.openMelovazAlbumDetail(track);
+                            return;
+                        }
+                        if (!trackIdStr) return;
+                        const trackId = parseInt(trackIdStr, 10);
+                        if (isNaN(trackId)) {
+                            const found = this.searchResults.find(t => String(t.id) === String(trackIdStr));
+                            if (found) this.playTrack(found.id, source);
+                            return;
+                        }
+                        this.playTrack(trackId, source);
                     } else {
                         if (!trackIdStr) return;
                         const trackId = parseInt(trackIdStr);
@@ -1287,8 +1873,11 @@ class MusicPlayer {
                 if (e.target.closest('button')) {
                     return;
                 }
-                const trackId = parseInt(div.dataset.trackId);
-                const trackIndex = this.playlist.findIndex(t => t.id === trackId);
+                const trackIdRaw = div.dataset.trackId;
+                const trackId = parseInt(trackIdRaw, 10);
+                const trackIndex = !isNaN(trackId)
+                    ? this.playlist.findIndex(t => t.id === trackId)
+                    : this.playlist.findIndex(t => String(t.id) === String(trackIdRaw));
                 if (trackIndex !== -1) {
                     this.currentIndex = trackIndex;
                     this.loadAndPlay(this.playlist[trackIndex]);
@@ -1503,6 +2092,7 @@ class MusicPlayer {
             if (this.currentIndex >= this.playlist.length) {
                 this.currentIndex = -1;
                 this.audioPlayer.pause();
+                this.updatePlayingStateInAllViews();
                 // Hide bottom player bar if no track is playing
                 if (this.bottomPlayerBar) {
                     this.bottomPlayerBar.style.display = 'none';
@@ -1540,9 +2130,27 @@ class MusicPlayer {
         this.savePlaylist();
     }
 
+    updatePlayingStateInAllViews() {
+        const current = this.getCurrentTrack();
+        document.querySelectorAll('.track-item').forEach(el => {
+            const trackId = el.dataset.trackId;
+            const trackUrl = el.dataset.trackUrl || '';
+            const isActive = current && (
+                (trackId != null && String(current.id) === String(trackId)) ||
+                (trackUrl && current.url && this.normalizeUrl((current.url || current.pageUrl || '').trim()) === trackUrl)
+            );
+            el.classList.toggle('active', !!isActive);
+        });
+    }
+
     loadAndPlay(track) {
         this.closeLyricsModal();
         this.currentTrackData = track;
+        if (this.playlist && this.playlist.length > 0) {
+            const idx = this.playlist.findIndex(t => String(t.id) === String(track.id) || (t.url === track.url && (t.pageUrl || t.url) === (track.pageUrl || track.url)));
+            if (idx !== -1) this.currentIndex = idx;
+        }
+        this.updatePlayingStateInAllViews();
         this.updateTrackDisplay(track.title, track.artist);
         this.updatePlayerPageFavoriteBtn();
         document.title = `${track.title || 'آهنگ'} - ${track.artist || 'ناشناس'} | xPlayer`;
@@ -1718,10 +2326,10 @@ class MusicPlayer {
                     console.log('Detected directory URL, loading playlist:', directoryUrl);
                     this.loadDirectoryPlaylist(directoryUrl, track, { displayInExploreDetail: fromTopMonthly });
                 } else {
-                    // Update track metadata from page
+                    // Update track metadata from page (اگر صفحه متادیتا نداده، مقدار قبلی ترک را نگه می‌داریم)
                     if (metadata.title != null) track.title = metadata.title;
                     if (metadata.artist != null) track.artist = metadata.artist;
-                    else track.artist = 'ناشناس';
+                    else if (!track.artist || (track.artist + '').trim() === '') track.artist = 'ناشناس';
                     if (metadata.image != null) track.image = metadata.image;
                     if (!track.title) {
                         try {
@@ -1844,6 +2452,9 @@ class MusicPlayer {
 
     async extractAudioUrl(pageUrl) {
         console.log('extractAudioUrl called with pageUrl:', pageUrl);
+        if (pageUrl && pageUrl.includes('melovaz.ir')) {
+            return this.extractAudioUrlFromMelovazPage(pageUrl);
+        }
         try {
             // Use multiple CORS proxies in parallel with short timeouts (robust for podcasts)
             const proxyPromises = [
@@ -2144,6 +2755,128 @@ class MusicPlayer {
             return returnResult(null);
         } catch (error) {
             console.error('Error extracting audio URL:', error);
+            return { url: null, title: null, artist: null, image: null };
+        }
+    }
+
+    async extractAudioUrlFromMelovazPage(pageUrl, fromAlbumFallback = false) {
+        const baseUrl = 'https://melovaz.ir';
+        const returnResult = (url) => ({ url, title: null, artist: null, image: null });
+        if (pageUrl && pageUrl.includes('vip-dl') && (pageUrl.includes('.mp3') || pageUrl.includes('.m4a'))) {
+            return returnResult(pageUrl);
+        }
+        const encoded = encodeURIComponent(pageUrl);
+        const proxyFetchers = [
+            async () => {
+                const r = await fetch(`https://corsproxy.io/?${encoded}`, { mode: 'cors' });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return await r.text();
+            },
+            async () => {
+                const r = await fetch(`https://api.allorigins.win/raw?url=${encoded}`, { mode: 'cors' });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return await r.text();
+            },
+            async () => {
+                const r = await fetch(`https://api.allorigins.win/get?url=${encoded}`, { mode: 'cors' });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                const data = await r.json();
+                return (data && data.contents) || '';
+            },
+            async () => {
+                const r = await fetch(`https://api.codetabs.com/v1/proxy?quest=${encoded}`, { mode: 'cors' });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return await r.text();
+            },
+            async () => {
+                const r = await fetch(`https://api.cors.lol/?url=${encoded}`, { mode: 'cors' });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                const data = await r.json();
+                return (data && data.contents) || (typeof data === 'string' ? data : '');
+            }
+        ];
+
+        let html = '';
+        for (let i = 0; i < proxyFetchers.length; i++) {
+            try {
+                html = await proxyFetchers[i]();
+                if (html && html.length > 500) break;
+            } catch (e) {
+                console.warn('Melovaz proxy', i + 1, 'failed:', e.message);
+            }
+        }
+        if (!html || html.length < 200) {
+            console.error('extractAudioUrlFromMelovazPage: همه پراکسی‌ها ناموفق بودند');
+            return { url: null, title: null, artist: null, image: null };
+        }
+
+        try {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const returnResult = (url) => ({ url, title: null, artist: null, image: null });
+
+            const audioSrc = doc.querySelector('audio source, audio[src]');
+            if (audioSrc) {
+                const src = (audioSrc.src || audioSrc.getAttribute('src') || '').trim();
+                if (src && (src.includes('.mp3') || src.includes('.m4a') || src.includes('.ogg'))) {
+                    const final = src.startsWith('http') ? src : (src.startsWith('/') ? baseUrl + src : baseUrl + '/' + src);
+                    return returnResult(final);
+                }
+            }
+            const dataSrc = doc.querySelector('[data-src], [data-audio], [data-mp3]');
+            if (dataSrc) {
+                const src = (dataSrc.getAttribute('data-src') || dataSrc.getAttribute('data-audio') || dataSrc.getAttribute('data-mp3') || '').trim();
+                if (src && (src.includes('.mp3') || src.includes('.m4a'))) {
+                    const final = src.startsWith('http') ? src : (src.startsWith('/') ? baseUrl + src : baseUrl + '/' + src);
+                    return returnResult(final);
+                }
+            }
+            const mp3Links = doc.querySelectorAll('a[href*=".mp3"], a[href*=".m4a"]');
+            for (const a of mp3Links) {
+                const href = a.getAttribute('href') || a.href || '';
+                if (href.includes('.zip')) continue;
+                const final = href.startsWith('http') ? href : (href.startsWith('/') ? baseUrl + href : baseUrl + '/' + href);
+                if (final && (final.endsWith('.mp3') || final.endsWith('.m4a') || final.includes('.mp3') || final.includes('.m4a'))) {
+                    return returnResult(final);
+                }
+            }
+            const scripts = doc.querySelectorAll('script');
+            for (const script of scripts) {
+                const content = script.textContent || '';
+                let match = content.match(/https?:\/\/[^\s"']+\.(mp3|m4a)(?:\?[^\s"']*)?/i);
+                if (!match) match = content.match(/(["'])(https?:\/\/[^"']+\.(?:mp3|m4a)[^"']*)\1/);
+                if (match && match[0]) {
+                    const url = match[2] || match[0];
+                    if (url.includes('.mp3') || url.includes('.m4a')) return returnResult(url.trim());
+                }
+            }
+            const anyMp3 = doc.querySelector('[href*=".mp3"], [href*=".m4a"], [src*=".mp3"], [src*=".m4a"], [data-src*=".mp3"], [data-url*=".mp3"]');
+            if (anyMp3) {
+                const u = anyMp3.getAttribute('href') || anyMp3.getAttribute('src') || anyMp3.getAttribute('data-src') || anyMp3.getAttribute('data-url') || '';
+                if (u && !u.includes('.zip')) {
+                    const final = u.startsWith('http') ? u : (u.startsWith('/') ? baseUrl + u : baseUrl + '/' + u);
+                    if (final.includes('.mp3') || final.includes('.m4a')) return returnResult(final);
+                }
+            }
+            // صفحه ممکن است آلبوم/کامپایل باشد؛ اولین لینک ترک را فقط از داخل لیست واقعی بگیر (نه پیشنهادی‌ها)
+            if (!fromAlbumFallback) {
+                const tracklistRoot = doc.querySelector('.audioplayer-tracklist-container') || doc;
+                const firstTrackLink = tracklistRoot.querySelector('table tbody tr a[href*="melovaz.ir"], .track-list a[href*="melovaz.ir"], .track a[href*="melovaz.ir"], .song a[href*="melovaz.ir"], .playlist-item a[href*="melovaz.ir"]');
+                if (firstTrackLink) {
+                    let firstHref = firstTrackLink.getAttribute('href') || firstTrackLink.href || '';
+                    if (firstHref && !firstHref.includes('/category/') && !firstHref.includes('/tag/') && !firstHref.includes('.zip')) {
+                        const firstPageUrl = firstHref.startsWith('http') ? firstHref : (firstHref.startsWith('/') ? baseUrl + firstHref : baseUrl + '/' + firstHref);
+                        if (firstPageUrl !== pageUrl) {
+                            try {
+                                const sub = await this.extractAudioUrlFromMelovazPage(firstPageUrl, true);
+                                if (sub && sub.url) return returnResult(sub.url);
+                            } catch (_) {}
+                        }
+                    }
+                }
+            }
+            return returnResult(null);
+        } catch (e) {
+            console.error('extractAudioUrlFromMelovazPage parse error:', e);
             return { url: null, title: null, artist: null, image: null };
         }
     }
@@ -2764,7 +3497,6 @@ class MusicPlayer {
             this.playlist = [track];
             this.currentIndex = 0;
             this.loadAndPlay(track);
-            this.navigateToPage('player');
             history.replaceState({}, '', window.location.pathname);
         } catch (e) {
             console.warn('Could not play from URL:', e);
@@ -3459,6 +4191,7 @@ class MusicPlayer {
             this.currentIndex = -1;
             this.audioPlayer.pause();
             this.audioPlayer.src = '';
+            this.updatePlayingStateInAllViews();
             // Hide bottom player bar if no track is playing
             if (this.bottomPlayerBar) {
                 this.bottomPlayerBar.style.display = 'none';
@@ -5140,7 +5873,11 @@ class MusicPlayer {
         this.hasMoreResults = true;
         this.isLoadingMore = false;
 
-        this.fetchSearchResults(query, 1).then(result => {
+        const fetchPromise = this.currentSearchSource === SEARCH_SOURCES.melovaz
+            ? this.fetchSearchResultsMelovaz(query, 1)
+            : this.fetchSearchResults(query, 1);
+
+        fetchPromise.then(result => {
             console.log('Search results received:', result);
             console.log('Result type:', typeof result, 'Is array:', Array.isArray(result));
             
@@ -5569,31 +6306,24 @@ class MusicPlayer {
             return;
         }
 
-        // Disconnect existing observer if any
         if (this.scrollObserver) {
             this.scrollObserver.disconnect();
+            this.scrollObserver = null;
         }
 
         this.scrollObserver = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
-                console.log('Loader intersection:', entry.isIntersecting, 'hasMore:', this.hasMoreResults, 'isLoading:', this.isLoadingMore, 'page:', this.currentPage);
-                if (entry.isIntersecting && 
-                    this.hasMoreResults && 
-                    !this.isLoadingMore && 
-                    this.currentSearchQuery &&
-                    this.currentPage === 'search') {
-                    console.log('Loading more results...');
-                    this.loadMoreResults();
-                }
+                if (!entry.isIntersecting) return;
+                if (!this.hasMoreResults || this.isLoadingMore || !this.currentSearchQuery || this.currentPage !== 'search') return;
+                this.loadMoreResults();
             });
         }, {
             root: null,
-            rootMargin: '200px', // Start loading earlier
-            threshold: 0.1
+            rootMargin: '400px',
+            threshold: 0
         });
 
         this.scrollObserver.observe(loader);
-        console.log('Infinite scroll observer setup complete');
     }
 
     async loadMoreResults() {
@@ -5616,7 +6346,9 @@ class MusicPlayer {
         try {
             const nextPage = this.currentSearchPage + 1;
             console.log(`Fetching page ${nextPage} for query: ${this.currentSearchQuery}`);
-            const result = await this.fetchSearchResults(this.currentSearchQuery, nextPage);
+            const result = this.currentSearchSource === SEARCH_SOURCES.melovaz
+                ? await this.fetchSearchResultsMelovaz(this.currentSearchQuery, nextPage)
+                : await this.fetchSearchResults(this.currentSearchQuery, nextPage);
             
             // Handle both formats
             let newResults = [];
