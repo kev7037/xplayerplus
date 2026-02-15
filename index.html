@@ -176,7 +176,9 @@
                             </svg>
                         </button>
                         <h1 id="exploreDetailTitle">اکسپلور</h1>
-                        <div class="header-spacer"></div>
+                        <div class="header-actions" id="exploreDetailActions">
+                            <button type="button" id="addAllToPlaylistExploreBtn" class="btn btn-secondary btn-small btn-add-all-playlist" title="اضافه کردن همه آهنگ‌ها به پلی‌لیست" disabled>➕ به پلی‌لیست</button>
+                        </div>
                     </div>
                     
                     <section class="content-section">
@@ -228,6 +230,7 @@
                         </button>
                         <h1 id="playlistDetailTitle">پلی‌لیست</h1>
                         <div class="header-actions" id="playlistDetailActions">
+                            <button type="button" id="addAllToPlaylistDetailBtn" class="btn btn-secondary btn-small btn-touch btn-add-all-playlist" title="اضافه کردن همه آهنگ‌ها به پلی‌لیست" disabled>➕ به پلی‌لیست</button>
                             <button id="playlistExportBtn" class="btn btn-secondary btn-small btn-touch" type="button" title="خروجی">خروجی</button>
                             <label for="playlistImportInput" class="btn btn-secondary btn-small btn-touch" id="playlistImportLabel" title="ورودی" style="display:none;">ورودی</label>
                             <input type="file" id="playlistImportInput" accept=".json,application/json,text/plain" style="display:none">

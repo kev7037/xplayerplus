@@ -153,6 +153,7 @@ body {
 
 /* Card hover animation */
 .track-item {
+    cursor: pointer;
     transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
 }
 
@@ -300,6 +301,16 @@ body {
     flex: 0 0 auto;
 }
 
+/* Detail pages: let title truncate so long album/playlist names don't break layout */
+#exploreDetailPage .page-header h1,
+#playlistDetailPage .page-header h1 {
+    flex: 1 1 0%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .page-header .btn:not(.btn-icon) {
     display: flex;
     align-items: center;
@@ -320,6 +331,12 @@ body {
 .page-header .btn-secondary:hover {
     background: var(--bg-hover);
     border-color: var(--text-secondary);
+}
+
+.page-header .btn-add-all-playlist:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
 }
 
 .page-header .header-spacer {
@@ -2931,6 +2948,39 @@ header h1 {
     border-radius: 8px;
     box-shadow: inset 0 0 0 3px var(--spotify-green);
     pointer-events: none;
+}
+
+/* در حال پخش در خانه، اکسپلور و جستجو — استایل واضح */
+.tracks-grid .track-item.active,
+.explore-horizontal-scroll .track-item.active,
+.explore-items-list .track-item.active,
+.results-container-main .track-item.active {
+    background: linear-gradient(135deg, rgba(29, 185, 84, 0.2) 0%, var(--bg-card) 100%);
+    border-color: var(--spotify-green);
+    box-shadow: 0 0 0 2px rgba(29, 185, 84, 0.4), var(--shadow-card);
+}
+
+.tracks-grid .track-item.active .track-info h4,
+.explore-horizontal-scroll .track-item.active .track-info h4,
+.explore-items-list .track-item.active .track-info h4,
+.results-container-main .track-item.active .track-info h4 {
+    color: var(--spotify-green);
+}
+
+/* صفحه خانه — موزیک‌های اخیر: استایل در حال پخش با specificity بالا */
+#homePage #recentTracks.tracks-grid .track-item.active {
+    background: linear-gradient(135deg, rgba(29, 185, 84, 0.25) 0%, var(--bg-card) 100%) !important;
+    border: 2px solid var(--spotify-green) !important;
+    box-shadow: 0 0 0 2px rgba(29, 185, 84, 0.5), 0 4px 12px rgba(29, 185, 84, 0.2) !important;
+}
+
+#homePage #recentTracks.tracks-grid .track-item.active .track-info h4,
+#homePage #recentTracks.tracks-grid .track-item.active .track-info p {
+    color: var(--spotify-green) !important;
+}
+
+#homePage #recentTracks.tracks-grid .track-item.active .track-image::after {
+    box-shadow: inset 0 0 0 3px var(--spotify-green) !important;
 }
 
 .track-image {

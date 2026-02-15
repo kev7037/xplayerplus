@@ -85,6 +85,7 @@ class MusicPlayer {
         this.exploreCache = {};
         this.exploreDetailScrollHandler = null;
         this.isDirectoryPlaylist = false; // Flag to indicate if exploreDetail shows a directory playlist
+        this.exploreDetailTracks = []; // Tracks currently shown on explore detail (برترین‌ها، آهنگ‌های جدید، پادکست)
         this.loadExploreCache();
         
         // Search
@@ -230,6 +231,10 @@ class MusicPlayer {
                 this.navigateToPage('playlists');
             });
         }
+        const addAllToPlaylistDetailBtn = document.getElementById('addAllToPlaylistDetailBtn');
+        if (addAllToPlaylistDetailBtn) {
+            addAllToPlaylistDetailBtn.addEventListener('click', () => this.showAddAllToPlaylistDialog());
+        }
         
         // Player page navigation - click on player bar track info
         if (this.playerBarTrack) {
@@ -281,6 +286,10 @@ class MusicPlayer {
             this.backFromExploreDetailBtn.addEventListener('click', () => {
                 this.navigateToPage('explore');
             });
+        }
+        const addAllToPlaylistExploreBtn = document.getElementById('addAllToPlaylistExploreBtn');
+        if (addAllToPlaylistExploreBtn) {
+            addAllToPlaylistExploreBtn.addEventListener('click', () => this.showAddAllToPlaylistDialog());
         }
         
         // Search (Main)
@@ -1186,6 +1195,7 @@ class MusicPlayer {
         const tracks = this.parseMelovazAlbumPage(html, pageUrl, albumTrack);
         if (tracks.length > 0) {
             this.playlist = tracks;
+            this.exploreDetailTracks = []; // use this.playlist for "add all"
             this.currentIndex = -1;
             this.currentPlaylistId = null;
             this.savePlaylist();
@@ -1197,6 +1207,7 @@ class MusicPlayer {
                 });
             }
             this.showToast(`آلبوم با ${tracks.length} آهنگ بارگذاری شد. برای پخش روی آهنگ مورد نظر کلیک کنید.`, 'success');
+            this.updateAddAllToPlaylistButtonState();
         } else {
             const single = { id: 'melovaz-single', title: albumTrack.title, artist: albumTrack.artist, url: pageUrl, pageUrl, image: albumTrack.image || '', source: 'melovaz' };
             this.playlist = [single];
@@ -1208,6 +1219,7 @@ class MusicPlayer {
                 this.exploreDetailContainer.appendChild(trackEl);
             }
             this.showToast('یک آهنگ یافت شد. برای پخش کلیک کنید.', 'success');
+            this.updateAddAllToPlaylistButtonState();
         }
     }
 
@@ -1637,10 +1649,10 @@ class MusicPlayer {
     }
 
     getCurrentTrack() {
-        if (this.currentIndex < 0) return null;
-        if (this.playlist && this.playlist[this.currentIndex]) return this.playlist[this.currentIndex];
-        if (this.currentTrackData) return this.currentTrackData;
-        return null;
+        if (this.currentIndex >= 0 && this.playlist && this.playlist[this.currentIndex]) {
+            return this.playlist[this.currentIndex];
+        }
+        return this.currentTrackData || null;
     }
 
     isTrackCurrentlyPlaying(track) {
@@ -1866,13 +1878,10 @@ class MusicPlayer {
             });
         });
 
-        // Click on track item to play (for playlist-detail)
-        if (source === 'playlist-detail') {
-            div.addEventListener('click', (e) => {
-                // Don't trigger if clicking on a button
-                if (e.target.closest('button')) {
-                    return;
-                }
+        // Click on track item: play or open detail (except when clicking buttons)
+        const handleCardClick = (e) => {
+            if (e.target.closest('button')) return;
+            if (source === 'playlist-detail') {
                 const trackIdRaw = div.dataset.trackId;
                 const trackId = parseInt(trackIdRaw, 10);
                 const trackIndex = !isNaN(trackId)
@@ -1882,12 +1891,52 @@ class MusicPlayer {
                     this.currentIndex = trackIndex;
                     this.loadAndPlay(this.playlist[trackIndex]);
                     this.updatePlaylistDisplay();
-                    // Update active state in detail view
-                    if (this.playlistTracksContainer) {
-                        this.displayPlaylistTracks(this.playlist);
+                    if (this.playlistTracksContainer) this.displayPlaylistTracks(this.playlist);
+                }
+                return;
+            }
+            if (source === 'results') {
+                if (track && track.source === 'melovaz' && track.isAlbumOrPlaylist) {
+                    this.openMelovazAlbumDetail(track);
+                    return;
+                }
+                const trackIdStr = div.dataset.trackId;
+                if (trackIdStr) {
+                    const trackId = parseInt(trackIdStr, 10);
+                    if (!isNaN(trackId)) {
+                        this.playTrack(trackId, source);
+                    } else {
+                        const found = this.searchResults.find(t => String(t.id) === String(trackIdStr));
+                        if (found) this.playTrack(found.id, source);
                     }
                 }
-            });
+                return;
+            }
+            if (source === 'home') {
+                this.loadAndPlay(track);
+                return;
+            }
+            if (source === 'explore') {
+                if (this.isDirectoryPlaylist && this.playlist && this.playlist.length > 0) {
+                    const trackIndex = this.playlist.findIndex(t => String(t.id) === String(track.id));
+                    if (trackIndex !== -1) {
+                        this.currentIndex = trackIndex;
+                        this.loadAndPlay(this.playlist[trackIndex]);
+                    } else {
+                        this.loadAndPlay(track);
+                    }
+                } else {
+                    this.loadAndPlay(track);
+                }
+                return;
+            }
+            if (source === 'explore-top') {
+                this.openTopMonthlyDirectoryFromExplore(track);
+            }
+        };
+
+        if (source === 'playlist-detail' || source === 'home' || source === 'results' || source === 'explore' || source === 'explore-top') {
+            div.addEventListener('click', handleCardClick);
         }
 
         return div;
@@ -1954,6 +2003,140 @@ class MusicPlayer {
                 this.addTrackToCustomPlaylist(playlistId, track);
                 document.body.removeChild(dialog);
                 this.showToast('موزیک به پلی‌لیست اضافه شد', 'success');
+            });
+        });
+    }
+
+    getTracksForCurrentDetailPage() {
+        if (this.currentPage === 'playlistDetail') {
+            return this.playlist && this.playlist.length ? [...this.playlist] : [];
+        }
+        if (this.currentPage === 'exploreDetail') {
+            if (this.exploreDetailTracks && this.exploreDetailTracks.length > 0) {
+                return [...this.exploreDetailTracks];
+            }
+            return this.playlist && this.playlist.length ? [...this.playlist] : [];
+        }
+        return [];
+    }
+
+    updateAddAllToPlaylistButtonState() {
+        const exploreBtn = document.getElementById('addAllToPlaylistExploreBtn');
+        const detailBtn = document.getElementById('addAllToPlaylistDetailBtn');
+        const exploreDetailVisible = this.pages.exploreDetail && this.pages.exploreDetail.classList.contains('active');
+        const playlistDetailVisible = this.playlistDetailPage && this.playlistDetailPage.classList.contains('active');
+        const exploreTrackCount = (this.exploreDetailTracks && this.exploreDetailTracks.length > 0)
+            ? this.exploreDetailTracks.length
+            : (this.playlist && this.playlist.length) || 0;
+        const playlistDetailTrackCount = (this.playlist && this.playlist.length) || 0;
+        if (exploreBtn) {
+            exploreBtn.disabled = !exploreDetailVisible || exploreTrackCount === 0;
+            exploreBtn.title = exploreTrackCount === 0 ? 'ابتدا آهنگ‌ها را بارگذاری کنید' : 'اضافه کردن همه آهنگ‌ها به پلی‌لیست';
+        }
+        if (detailBtn) {
+            detailBtn.disabled = !playlistDetailVisible || playlistDetailTrackCount === 0;
+            detailBtn.title = playlistDetailTrackCount === 0 ? 'لیست خالی است' : 'اضافه کردن همه آهنگ‌ها به پلی‌لیست';
+        }
+    }
+
+    addTracksToCustomPlaylist(playlistId, tracks) {
+        if (!tracks || tracks.length === 0) return { added: 0, skipped: 0 };
+        let added = 0;
+        let skipped = 0;
+        for (const track of tracks) {
+            const playlist = this.customPlaylists[playlistId];
+            if (!playlist) continue;
+            const normalizeUrl = (url) => {
+                if (!url) return '';
+                try {
+                    const urlObj = new URL(url);
+                    return urlObj.origin + urlObj.pathname;
+                } catch (e) {
+                    return (url || '').split('?')[0].split('#')[0];
+                }
+            };
+            const trackUrl = normalizeUrl(track.url);
+            const trackPageUrl = track.pageUrl ? normalizeUrl(track.pageUrl) : null;
+            const exists = playlist.tracks.some(t => {
+                const existingUrl = normalizeUrl(t.url);
+                const existingPageUrl = t.pageUrl ? normalizeUrl(t.pageUrl) : null;
+                return existingUrl === trackUrl || (trackPageUrl && existingPageUrl === trackPageUrl) ||
+                    (trackPageUrl && existingUrl === trackPageUrl) || (existingPageUrl && trackUrl === existingPageUrl);
+            });
+            if (exists) {
+                skipped++;
+            } else {
+                playlist.tracks.push({ ...track });
+                added++;
+            }
+        }
+        if (added > 0) {
+            const pl = this.customPlaylists[playlistId];
+            if (pl) pl.downloaded = false;
+            this.saveCustomPlaylists();
+            if (this.currentPage === 'playlists') this.displayCustomPlaylistsMain();
+        }
+        return { added, skipped };
+    }
+
+    showAddAllToPlaylistDialog() {
+        const tracks = this.getTracksForCurrentDetailPage();
+        if (!tracks || tracks.length === 0) {
+            this.showToast('هیچ آهنگی برای اضافه کردن نیست', 'info');
+            return;
+        }
+        if (!this.customPlaylists || typeof this.customPlaylists !== 'object') {
+            this.customPlaylists = {};
+        }
+        const playlists = Object.entries(this.customPlaylists).filter(([id]) => id !== this.FAVORITE_PLAYLIST_ID);
+        const count = tracks.length;
+        const dialog = document.createElement('div');
+        dialog.className = 'playlist-selector-dialog';
+        dialog.innerHTML = `
+            <div class="dialog-content">
+                <h3>اضافه کردن همه به پلی‌لیست</h3>
+                <p>${count} آهنگ به پلی‌لیست انتخاب شده اضافه می‌شود.</p>
+                <div class="playlist-selector-list">
+                    ${playlists.map(([id, playlist]) => `
+                        <div class="playlist-selector-item">
+                            <span>${this.escapeHtml(playlist.name)} (${playlist.tracks.length} موزیک)</span>
+                            <button class="btn btn-small btn-select-playlist" data-playlist-id="${id}">انتخاب</button>
+                        </div>
+                    `).join('')}
+                </div>
+                <div class="dialog-actions">
+                    <button class="btn btn-secondary btn-close-dialog">انصراف</button>
+                    <button class="btn btn-primary btn-create-new-from-dialog">پلی‌لیست جدید</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(dialog);
+        dialog.querySelector('.btn-close-dialog').addEventListener('click', () => document.body.removeChild(dialog));
+        dialog.querySelector('.btn-create-new-from-dialog').addEventListener('click', () => {
+            const name = prompt('نام پلی‌لیست را وارد کنید:');
+            if (!name || !name.trim()) return;
+            const id = this.nextPlaylistId++;
+            this.customPlaylists[id] = { name: name.trim(), tracks: [], downloaded: false };
+            const { added, skipped } = this.addTracksToCustomPlaylist(id, tracks);
+            this.saveCustomPlaylists();
+            if (this.currentPage === 'playlists') this.displayCustomPlaylistsMain();
+            document.body.removeChild(dialog);
+            if (skipped > 0) {
+                this.showToast(`${added} آهنگ اضافه شد، ${skipped} تکراری نادیده گرفته شد`, 'success');
+            } else {
+                this.showToast(`پلی‌لیست جدید ساخته شد و ${added} آهنگ اضافه شد`, 'success');
+            }
+        });
+        dialog.querySelectorAll('.btn-select-playlist').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const playlistId = btn.dataset.playlistId;
+                const { added, skipped } = this.addTracksToCustomPlaylist(playlistId, tracks);
+                document.body.removeChild(dialog);
+                if (skipped > 0) {
+                    this.showToast(`${added} آهنگ به پلی‌لیست اضافه شد، ${skipped} تکراری نادیده گرفته شد`, 'success');
+                } else {
+                    this.showToast(`${added} آهنگ به پلی‌لیست اضافه شد`, 'success');
+                }
             });
         });
     }
@@ -2132,13 +2315,18 @@ class MusicPlayer {
 
     updatePlayingStateInAllViews() {
         const current = this.getCurrentTrack();
+        if (!current) {
+            document.querySelectorAll('.track-item').forEach(el => el.classList.remove('active'));
+            return;
+        }
+        const currentUrlNorm = (current.url && this.normalizeUrl((current.url || '').trim())) || '';
+        const currentPageUrlNorm = (current.pageUrl && this.normalizeUrl((current.pageUrl || '').trim())) || '';
         document.querySelectorAll('.track-item').forEach(el => {
             const trackId = el.dataset.trackId;
-            const trackUrl = el.dataset.trackUrl || '';
-            const isActive = current && (
-                (trackId != null && String(current.id) === String(trackId)) ||
-                (trackUrl && current.url && this.normalizeUrl((current.url || current.pageUrl || '').trim()) === trackUrl)
-            );
+            const trackUrl = (el.dataset.trackUrl || '').trim();
+            const matchById = trackId != null && String(current.id) === String(trackId);
+            const matchByUrl = trackUrl && (currentUrlNorm === trackUrl || currentPageUrlNorm === trackUrl);
+            const isActive = matchById || matchByUrl;
             el.classList.toggle('active', !!isActive);
         });
     }
@@ -2350,6 +2538,7 @@ class MusicPlayer {
                     this.updateMediaSession?.();
                     console.log('Extracted audio URL:', url);
                     track.url = url;
+                    this.updatePlayingStateInAllViews();
                     const proxyUrls = [
                         `https://api.cors.lol/?url=${encodeURIComponent(url)}`,
                         `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
@@ -3400,6 +3589,7 @@ class MusicPlayer {
             this.isDirectoryPlaylist = true;
             
             if (displayInExploreDetail) {
+                this.exploreDetailTracks = []; // use this.playlist for "add all"
                 // We're already on exploreDetail page - just display tracks in exploreDetailContainer
                 if (this.exploreDetailLoadingIndicator) {
                     this.exploreDetailLoadingIndicator.style.display = 'none';
@@ -3412,6 +3602,7 @@ class MusicPlayer {
                     });
                 }
                 this.showToast(`پلی‌لیست با ${tracks.length} آهنگ بارگذاری شد. برای پخش، روی یکی از آهنگ‌ها کلیک کنید.`, 'success');
+                this.updateAddAllToPlaylistButtonState();
             } else {
                 // Original flow: show playlist detail page
                 Object.values(this.pages).forEach(p => {
@@ -3445,6 +3636,7 @@ class MusicPlayer {
                     this.displayPlaylistTracks(tracks);
                     this.showLoading(false);
                     this.showToast(`پلی‌لیست با ${tracks.length} آهنگ بارگذاری شد. برای پخش، روی یکی از آهنگ‌ها کلیک کنید.`, 'success');
+                    this.updateAddAllToPlaylistButtonState();
                 }, 300);
             }
             
@@ -4438,6 +4630,7 @@ class MusicPlayer {
             
             // Display tracks
             this.displayPlaylistTracks(playlist.tracks);
+            this.updateAddAllToPlaylistButtonState();
         }
     }
     
@@ -4726,9 +4919,14 @@ class MusicPlayer {
                 this.playlist = [];
                 this.currentIndex = -1;
             }
+            this.recentPlaylists = this.recentPlaylists.filter(p => p.id !== playlistId);
+            this.saveRecentData();
             this.saveCustomPlaylists();
             this.displayCustomPlaylistsMain();
             this.updatePlaylistDisplay();
+            if (this.currentPage === 'home') {
+                this.displayRecentPlaylists();
+            }
         }
     }
 
@@ -5050,6 +5248,13 @@ class MusicPlayer {
         }
         
         this.currentPage = page;
+        if (page === 'home') {
+            this.displayRecentTracks();
+            this.updatePlayingStateInAllViews();
+        }
+        if (page === 'exploreDetail') {
+            this.updateAddAllToPlaylistButtonState();
+        }
         
         // Scroll to top when switching pages
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -5549,20 +5754,8 @@ class MusicPlayer {
     // Create explore item element (reuse track card)
     // type: 'latest' | 'topMonthly' | 'podcasts'
     createExploreItem(track, type = 'explore') {
-        // برای برترین‌های ماه، یک کارت ساده بدون دکمه‌های play/delete می‌خواهیم
         const source = type === 'topMonthly' ? 'explore-top' : 'explore';
-        const el = this.createTrackElement(track, source);
-        
-        if (type === 'topMonthly') {
-            // روی کل باکس کلیک شود → اول به صفحه جزئیات برو، اسپینر نشان بده، بعد لود کن
-            el.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                this.openTopMonthlyDirectoryFromExplore(track);
-            });
-        }
-        
-        return el;
+        return this.createTrackElement(track, source);
     }
     
     // Open explore detail page
@@ -5586,6 +5779,7 @@ class MusicPlayer {
         this.exploreLoading = true;
         
         if (page === 1) {
+            this.exploreDetailTracks = [];
             if (this.exploreDetailLoadingIndicator) {
                 this.exploreDetailLoadingIndicator.style.display = 'flex';
             }
@@ -5641,6 +5835,12 @@ class MusicPlayer {
                     this.exploreDetailContainer.innerHTML = '';
             }
             
+            if (page === 1) {
+                this.exploreDetailTracks = [...items];
+            } else {
+                this.exploreDetailTracks.push(...items);
+            }
+            
             items.forEach(track => {
                 const trackEl = this.createTrackElement(track, 'explore');
                 if (this.exploreDetailContainer) {
@@ -5660,6 +5860,7 @@ class MusicPlayer {
             if (this.exploreHasMore && page === 1) {
                 this.setupExploreDetailInfiniteScroll();
             }
+            this.updateAddAllToPlaylistButtonState();
         } catch (error) {
             console.error(`Error loading explore detail (attempt ${retryCount + 1}/${maxRetries}):`, error);
             
@@ -5679,6 +5880,7 @@ class MusicPlayer {
                 this.exploreDetailInfiniteLoader.style.display = 'none';
             }
             this.exploreLoading = false;
+            this.updateAddAllToPlaylistButtonState();
         }
     }
     
@@ -5817,13 +6019,12 @@ class MusicPlayer {
     displayRecentPlaylists() {
         this.recentPlaylistsContainer.innerHTML = '';
         
-        if (this.recentPlaylists.length === 0) {
+        const existing = this.recentPlaylists.filter(p => this.customPlaylists && this.customPlaylists[p.id]);
+        if (existing.length === 0) {
             this.recentPlaylistsContainer.innerHTML = '<p class="empty-state">هیچ پلی‌لیستی پخش نشده است</p>';
             return;
         }
-        
-        // Show last 4 playlists
-        const playlistsToShow = this.recentPlaylists.slice(-4).reverse();
+        const playlistsToShow = existing.slice(-4).reverse();
         playlistsToShow.forEach(({ id, name, tracks }) => {
             // Ensure tracks is a number
             const tracksCount = typeof tracks === 'number' ? tracks : (Array.isArray(tracks) ? tracks.length : 0);
