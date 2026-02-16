@@ -44,6 +44,14 @@
                             <p class="empty-state">هیچ موزیکی پخش نشده است</p>
                         </div>
                     </section>
+                    
+                    <!-- Smart: Last 7 days -->
+                    <section class="content-section" id="recentTracksLast7Section">
+                        <h2 class="section-title">آهنگ‌های ۷ روز گذشته</h2>
+                        <div id="recentTracksLast7" class="tracks-grid">
+                            <p class="empty-state">هنوز آهنگی در این هفته پخش نشده</p>
+                        </div>
+                    </section>
                 </div>
 
                 <!-- Search Page -->
@@ -54,14 +62,19 @@
                         <div class="header-spacer"></div>
                     </div>
                     
-                    <section class="content-section search-page-content">
+                    <section class="content-section search-page-content" id="searchPageContent">
+                        <div id="pullToRefreshIndicator" class="pull-to-refresh-indicator" style="display: none;">
+                            <div class="pull-to-refresh-spinner"></div>
+                            <span>رها کنید تا جستجو مجدد انجام شود</span>
+                        </div>
                         <div class="search-source-tabs" id="searchSourceTabs" role="tablist">
-                            <button type="button" class="search-source-tab active" data-source="tehran" id="searchSourceTehran" aria-selected="true">تهران موزیک</button>
+                            <button type="button" class="search-source-tab active search-source-tab-all" data-source="all" id="searchSourceAll" aria-selected="true">همه</button>
+                            <button type="button" class="search-source-tab" data-source="tehran" id="searchSourceTehran" aria-selected="false">تهران موزیک</button>
                             <button type="button" class="search-source-tab" data-source="melovaz" id="searchSourceMelovaz" aria-selected="false">ملواز</button>
                             <button type="button" class="search-source-tab" data-source="tiarin" id="searchSourceTiarin" aria-selected="false">تیارین</button>
                         </div>
                         <div class="search-box-wrapper">
-                            <div class="search-box-large">
+                            <div class="search-box-large" id="searchBoxContainer">
                                 <span class="search-icon">
                                     <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
                                         <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
@@ -73,7 +86,13 @@
                                     placeholder="جستجوی موزیک، خواننده یا آلبوم..."
                                     autocomplete="off"
                                 >
+                                <button id="voiceSearchBtn" class="btn btn-icon btn-voice-search" type="button" title="جستجوی صوتی">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                        <path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/>
+                                    </svg>
+                                </button>
                                 <button id="searchBtnMain" class="btn btn-primary btn-search-submit">جستجو</button>
+                                <div id="autocompleteDropdown" class="autocomplete-dropdown" style="display: none;"></div>
                             </div>
                         </div>
                         
@@ -97,7 +116,27 @@
                         </div>
                         
                         <div id="searchResultsMain" class="results-section-main">
-                            <h3 class="results-title">نتایج جستجو</h3>
+                            <div class="results-header">
+                                <div class="results-title-section">
+                                    <h3 class="results-title">نتایج جستجو</h3>
+                                    <div id="resultCounts" class="result-counts" style="display: none;"></div>
+                                </div>
+                                <div class="results-controls">
+                                    <div class="filter-buttons">
+                                        <button class="filter-btn active" data-filter="all" title="همه">همه</button>
+                                        <button class="filter-btn" data-filter="tracks" title="فقط آهنگ‌ها">آهنگ‌ها</button>
+                                        <button class="filter-btn" data-filter="albums" title="فقط آلبوم‌ها">آلبوم‌ها</button>
+                                        <button class="filter-btn" data-filter="playlists" title="فقط پلی‌لیست‌ها">پلی‌لیست‌ها</button>
+                                    </div>
+                                    <div class="sort-dropdown">
+                                        <select id="searchSortSelect" class="sort-select">
+                                            <option value="relevance">مرتبط‌ترین</option>
+                                            <option value="newest">جدیدترین</option>
+                                            <option value="popular">محبوب‌ترین</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
                             <div id="resultsContainerMain" class="results-container-main">
                             </div>
                             <!-- Infinite Scroll Loader -->
@@ -301,6 +340,11 @@
                         </button>
                         <h1>در حال پخش</h1>
                         <div class="header-actions">
+                            <button id="sleepTimerBtn" class="btn btn-icon" title="تایمر خواب">
+                                <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/>
+                                </svg>
+                            </button>
                             <button id="shareStoryBtn" class="btn btn-icon" title="استوری اینستاگرام">
                                 <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
                                     <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>

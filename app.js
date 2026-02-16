@@ -1,6 +1,7 @@
 // xPlayer - Main Application Logic
 
 const SEARCH_SOURCES = {
+    all: 'all',
     tehran: 'tehran',
     melovaz: 'melovaz',
     tiarin: 'tiarin'
@@ -16,9 +17,19 @@ class MusicPlayer {
         this.searchResults = [];
         this.currentSearchQuery = '';
         this.currentSearchPage = 1;
-        this.currentSearchSource = SEARCH_SOURCES.tehran;
+        this.currentSearchSource = SEARCH_SOURCES.all;
         this.isLoadingMore = false;
         this.hasMoreResults = true;
+        this.autocompleteSelectedIndex = -1;
+        this.autocompleteDebounceTimer = null;
+        this.searchFilterType = 'all'; // 'all', 'tracks', 'albums', 'playlists'
+        this.searchSortBy = 'relevance'; // 'relevance', 'newest', 'popular'
+        this.pullToRefreshStartY = 0;
+        this.pullToRefreshCurrentY = 0;
+        this.pullToRefreshThreshold = 80;
+        this.isPullToRefreshActive = false;
+        this.sleepTimerMinutes = 0;
+        this.sleepTimerInterval = null;
         this.customPlaylists = {}; // Initialize customPlaylists
         this.currentPlaylistId = null;
         this.nextPlaylistId = 1;
@@ -92,6 +103,7 @@ class MusicPlayer {
         // Search
         this.searchInput = document.getElementById('searchInputMain');
         this.searchBtn = document.getElementById('searchBtnMain');
+        this.autocompleteDropdown = document.getElementById('autocompleteDropdown');
         
         // Player
         this.audioPlayer = document.getElementById('audioPlayer');
@@ -129,6 +141,7 @@ class MusicPlayer {
         this.playerPageLyricsBtn = document.getElementById('playerPageLyricsBtn');
         this.playerPageAddBtn = document.getElementById('playerPageAddBtn');
         this.playerPageFavoriteBtn = document.getElementById('playerPageFavoriteBtn');
+        this.sleepTimerBtn = document.getElementById('sleepTimerBtn');
         this.isDraggingProgress = false;
         this.draggingProgressTrack = null;
         
@@ -141,12 +154,16 @@ class MusicPlayer {
         
         // Home Page
         this.recentTracksContainer = document.getElementById('recentTracks');
+        this.recentTracksLast7Container = document.getElementById('recentTracksLast7');
+        this.recentTracksLast7Section = document.getElementById('recentTracksLast7Section');
         this.recentPlaylistsContainer = document.getElementById('recentPlaylists');
         // Search Page
         this.searchHistoryList = document.getElementById('searchHistoryList');
         this.searchResultsMain = document.getElementById('searchResultsMain');
         this.resultsContainerMain = document.getElementById('resultsContainerMain');
         this.searchLoadingIndicator = document.getElementById('searchLoadingIndicator');
+        this.searchPageContent = document.getElementById('searchPageContent');
+        this.pullToRefreshIndicator = document.getElementById('pullToRefreshIndicator');
         
         // Playlists Page
         this.playlistsListMain = document.getElementById('playlistsListMain');
@@ -229,7 +246,13 @@ class MusicPlayer {
                     this.playlistDetailPage.style.visibility = 'hidden';
                     this.playlistDetailPage.classList.remove('active');
                 }
-                this.navigateToPage('playlists');
+                // Go back to previous page or playlists
+                const previousPage = this.previousPage || 'playlists';
+                if (previousPage !== 'playlistDetail') {
+                    this.navigateToPage(previousPage);
+                } else {
+                    this.navigateToPage('playlists');
+                }
             });
         }
         const addAllToPlaylistDetailBtn = document.getElementById('addAllToPlaylistDetailBtn');
@@ -285,7 +308,13 @@ class MusicPlayer {
         // Back from explore detail page button
         if (this.backFromExploreDetailBtn) {
             this.backFromExploreDetailBtn.addEventListener('click', () => {
-                this.navigateToPage('explore');
+                // Go back to previous page or explore
+                const previousPage = this.previousPage || 'explore';
+                if (previousPage !== 'exploreDetail') {
+                    this.navigateToPage(previousPage);
+                } else {
+                    this.navigateToPage('explore');
+                }
             });
         }
         const addAllToPlaylistExploreBtn = document.getElementById('addAllToPlaylistExploreBtn');
@@ -299,7 +328,39 @@ class MusicPlayer {
         }
         if (this.searchInput) {
             this.searchInput.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') this.searchMain();
+                if (e.key === 'Enter') {
+                    if (this.autocompleteSelectedIndex >= 0 && this.autocompleteDropdown && this.autocompleteDropdown.style.display !== 'none') {
+                        this.selectAutocompleteSuggestion(this.autocompleteSelectedIndex);
+                    } else {
+                        this.searchMain();
+                    }
+                } else if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    this.navigateAutocomplete(1);
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    this.navigateAutocomplete(-1);
+                } else if (e.key === 'Escape') {
+                    this.hideAutocomplete();
+                }
+            });
+            this.searchInput.addEventListener('input', (e) => {
+                const query = e.target.value.trim();
+                if (query.length > 0) {
+                    this.showAutocompleteSuggestions(query);
+                } else {
+                    this.hideAutocomplete();
+                }
+            });
+            this.searchInput.addEventListener('blur', () => {
+                // Delay hiding to allow click on suggestion
+                setTimeout(() => this.hideAutocomplete(), 200);
+            });
+            this.searchInput.addEventListener('focus', (e) => {
+                const query = e.target.value.trim();
+                if (query.length > 0) {
+                    this.showAutocompleteSuggestions(query);
+                }
             });
         }
         const clearSearchHistoryBtn = document.getElementById('clearSearchHistoryBtn');
@@ -309,7 +370,7 @@ class MusicPlayer {
         document.querySelectorAll('.search-source-tab').forEach(tab => {
             tab.addEventListener('click', () => {
                 const source = tab.dataset.source;
-                if (source !== SEARCH_SOURCES.tehran && source !== SEARCH_SOURCES.melovaz && source !== SEARCH_SOURCES.tiarin) return;
+                if (source !== SEARCH_SOURCES.all && source !== SEARCH_SOURCES.tehran && source !== SEARCH_SOURCES.melovaz && source !== SEARCH_SOURCES.tiarin) return;
                 this.currentSearchSource = source;
                 document.querySelectorAll('.search-source-tab').forEach(t => {
                     t.classList.toggle('active', t.dataset.source === source);
@@ -319,6 +380,35 @@ class MusicPlayer {
                 this.displaySearchResultsMain(this.searchResults, true);
             });
         });
+
+        // Filter buttons
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const filter = btn.dataset.filter;
+                this.searchFilterType = filter;
+                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                this.applyFiltersAndSort();
+            });
+        });
+
+        // Sort dropdown
+        const sortSelect = document.getElementById('searchSortSelect');
+        if (sortSelect) {
+            sortSelect.addEventListener('change', (e) => {
+                this.searchSortBy = e.target.value;
+                this.applyFiltersAndSort();
+            });
+        }
+
+        // Pull to refresh
+        this.setupPullToRefresh();
+
+        // Voice search
+        const voiceSearchBtn = document.getElementById('voiceSearchBtn');
+        if (voiceSearchBtn) {
+            voiceSearchBtn.addEventListener('click', () => this.startVoiceSearch());
+        }
 
         // Playlists Page
         if (this.createPlaylistBtnMain) {
@@ -547,6 +637,9 @@ class MusicPlayer {
                     this.showToast('آهنگی برای علاقه‌مندی نیست', 'info');
                 }
             });
+        }
+        if (this.sleepTimerBtn) {
+            this.sleepTimerBtn.addEventListener('click', () => this.showSleepTimerMenu());
         }
     }
 
@@ -2269,6 +2362,10 @@ class MusicPlayer {
                     </div>
                 `;
             } else {
+                const sourceLabels = { tehran: 'تهران موزیک', melovaz: 'ملواز', tiarin: 'تیارین' };
+                const sourceBadge = (source === 'results' && track.source && sourceLabels[track.source])
+                    ? `<span class="track-source-badge" title="منبع: ${sourceLabels[track.source]}">${sourceLabels[track.source]}</span>`
+                    : '';
                 div.innerHTML = `
                     <div class="track-image">
                         <img src="${trackImage}" alt="${this.escapeHtml(track.title)}" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 24 24\\' fill=\\'%23b3b3b3\\'%3E%3Cpath d=\\'M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z\\'/%3E%3C/svg%3E'">
@@ -2276,6 +2373,7 @@ class MusicPlayer {
                     <div class="track-info">
                         <h4>${this.escapeHtml(track.title)}</h4>
                         <p>${this.escapeHtml(track.artist)}</p>
+                        ${sourceBadge}
                     </div>
                     <div class="track-actions">
                         ${source === 'results' || source === 'home' || source === 'explore' ? 
@@ -5268,6 +5366,10 @@ class MusicPlayer {
             playlist.tracks = [];
         }
         
+        // Use navigateToPage to properly handle previousPage
+        // But navigateToPage will return early for playlistDetail, so we handle display here
+        this.navigateToPage('playlistDetail');
+        
         // Hide all pages
         Object.values(this.pages).forEach(p => {
             if (p) {
@@ -5445,10 +5547,15 @@ class MusicPlayer {
                         }
                         const playlist = this.customPlaylists[playlistId];
                         if (playlist) {
-                            playlist.tracks.push(...tracks);
-                            this.saveCustomPlaylists();
-                            this.displayPlaylistTracks(playlist.tracks);
-                            this.showToast(`${tracks.length} آهنگ وارد شد`, 'success');
+                            const { added, skipped } = this.addTracksToCustomPlaylist(playlistId, tracks);
+                            if (this.currentPlaylistId === playlistId && this.playlistTracksContainer) {
+                                this.displayPlaylistTracks(playlist.tracks);
+                            }
+                            if (skipped > 0) {
+                                this.showToast(`${added} آهنگ اضافه شد، ${skipped} تکراری نادیده گرفته شد`, 'success');
+                            } else {
+                                this.showToast(`${added} آهنگ وارد شد`, 'success');
+                            }
                         }
                     } catch (err) {
                         this.showError('خطا در خواندن فایل');
@@ -5866,6 +5973,23 @@ class MusicPlayer {
         console.log('Navigating to page:', page);
         console.log('Available pages:', this.pages);
         
+        // Save current page as previous before navigating (except for special pages)
+        // Don't overwrite previousPage if we're going to a detail page (player, playlistDetail, exploreDetail)
+        // because those should remember where they came from
+        const detailPages = ['player', 'playlistDetail', 'exploreDetail'];
+        if (!detailPages.includes(page) && this.currentPage && this.currentPage !== page) {
+            // Only update previousPage if currentPage is not a detail page
+            // (detail pages should keep their original previousPage)
+            if (!detailPages.includes(this.currentPage)) {
+                this.previousPage = this.currentPage;
+            }
+        }
+        
+        // If navigating TO a detail page, save current page as previous
+        if (detailPages.includes(page) && this.currentPage && this.currentPage !== page) {
+            this.previousPage = this.currentPage;
+        }
+        
         // Hide all pages first (force hide with !important via inline style)
         Object.values(this.pages).forEach(p => {
             if (p) {
@@ -5876,7 +6000,8 @@ class MusicPlayer {
         });
         
         // Also hide playlistDetailPage if it exists (it's not in this.pages)
-        if (this.playlistDetailPage) {
+        // Only hide if we're NOT navigating to playlistDetail
+        if (page !== 'playlistDetail' && this.playlistDetailPage) {
             this.playlistDetailPage.classList.remove('active');
             this.playlistDetailPage.style.display = 'none';
             this.playlistDetailPage.style.visibility = 'hidden';
@@ -5893,6 +6018,11 @@ class MusicPlayer {
             this.pages[page].style.display = 'block';
             this.pages[page].style.visibility = 'visible';
             console.log('Page', page, 'displayed successfully');
+        } else if (page === 'playlistDetail') {
+            // playlistDetail is handled by showPlaylistDetail, not here
+            // But we still need to set currentPage - showPlaylistDetail will handle display
+            this.currentPage = 'playlistDetail';
+            return;
         } else {
             console.error('Page not found:', page, 'Available:', Object.keys(this.pages));
             // Fallback to home if page not found
@@ -6657,6 +6787,7 @@ class MusicPlayer {
 
     updateHomePage() {
         this.displayRecentTracks();
+        this.displayRecentTracksLast7Days();
         this.displayRecentPlaylists();
     }
 
@@ -6678,6 +6809,31 @@ class MusicPlayer {
         tracksToShow.forEach(track => {
             const trackEl = this.createTrackElement(track, 'home');
             this.recentTracksContainer.appendChild(trackEl);
+        });
+    }
+
+    getRecentTracksLast7Days() {
+        if (!this.recentTracks || this.recentTracks.length === 0) return [];
+        const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+        return this.recentTracks.filter(t => (t.playedAt || 0) >= sevenDaysAgo);
+    }
+
+    displayRecentTracksLast7Days() {
+        if (!this.recentTracksLast7Container || !this.recentTracksLast7Section) return;
+        
+        const tracks = this.getRecentTracksLast7Days();
+        
+        if (tracks.length === 0) {
+            this.recentTracksLast7Section.style.display = 'none';
+            return;
+        }
+        
+        this.recentTracksLast7Section.style.display = 'block';
+        this.recentTracksLast7Container.innerHTML = '';
+        const tracksToShow = tracks.slice(0, 6);
+        tracksToShow.forEach(track => {
+            const trackEl = this.createTrackElement(track, 'home');
+            this.recentTracksLast7Container.appendChild(trackEl);
         });
     }
 
@@ -6726,6 +6882,236 @@ class MusicPlayer {
         });
     }
 
+    // Calculate relevance score for a track based on search query
+    calculateRelevanceScore(query, track) {
+        if (!query || !track) return 0;
+        
+        const normalizeText = (text) => {
+            if (!text) return '';
+            return String(text)
+                .toLowerCase()
+                .replace(/[\u200C\u200D\u064B-\u065F\u0670\u0640]/g, '') // Remove Arabic diacritics
+                .replace(/[یي]/g, 'ی')
+                .replace(/[کك]/g, 'ک')
+                .replace(/[ةه]/g, 'ه')
+                .replace(/\s+/g, ' ') // Normalize spaces
+                .trim();
+        };
+        
+        const normalizedQuery = normalizeText(query);
+        const normalizedTitle = normalizeText(track.title);
+        const normalizedArtist = normalizeText(track.artist);
+        
+        if (!normalizedQuery || (!normalizedTitle && !normalizedArtist)) return 0;
+        
+        let score = 0;
+        
+        // Exact match in title (highest priority)
+        if (normalizedTitle === normalizedQuery) {
+            score += 1000;
+        } else if (normalizedTitle.includes(normalizedQuery)) {
+            // Starts with query
+            if (normalizedTitle.startsWith(normalizedQuery)) {
+                score += 500;
+            } else {
+                // Contains query
+                score += 200;
+            }
+        }
+        
+        // Exact match in artist
+        if (normalizedArtist === normalizedQuery) {
+            score += 800;
+        } else if (normalizedArtist.includes(normalizedQuery)) {
+            // Starts with query
+            if (normalizedArtist.startsWith(normalizedQuery)) {
+                score += 400;
+            } else {
+                // Contains query
+                score += 150;
+            }
+        }
+        
+        // Combined match: query appears in both title and artist
+        const titleHasQuery = normalizedTitle && normalizedTitle.includes(normalizedQuery);
+        const artistHasQuery = normalizedArtist && normalizedArtist.includes(normalizedQuery);
+        if (titleHasQuery && artistHasQuery) {
+            score += 300; // Bonus for appearing in both
+        }
+        
+        // Word-level matching (split query into words)
+        const queryWords = normalizedQuery.split(/\s+/).filter(w => w.length > 1);
+        if (queryWords.length > 1) {
+            let matchedWords = 0;
+            queryWords.forEach(word => {
+                if (normalizedTitle && normalizedTitle.includes(word)) {
+                    score += 50;
+                    matchedWords++;
+                }
+                if (normalizedArtist && normalizedArtist.includes(word)) {
+                    score += 30;
+                    matchedWords++;
+                }
+            });
+            // Bonus if all words match
+            if (matchedWords >= queryWords.length * 2) {
+                score += 100;
+            }
+        }
+        
+        // Bonus for shorter titles/artists (more precise matches)
+        if (normalizedTitle && normalizedTitle.length < normalizedQuery.length * 2) {
+            score += 10;
+        }
+        if (normalizedArtist && normalizedArtist.length < normalizedQuery.length * 2) {
+            score += 10;
+        }
+        
+        return score;
+    }
+    
+    // Filter invalid or irrelevant search results
+    filterInvalidResults(query, results) {
+        if (!results || results.length === 0) return [];
+        
+        const normalizedQuery = query.toLowerCase().trim();
+        const queryWords = normalizedQuery.split(/\s+/).filter(w => w.length > 1);
+        
+        return results.filter(track => {
+            // Must have valid title and artist
+            if (!track.title || !track.artist || track.title.length < 2 || track.artist.length < 2) {
+                return false;
+            }
+            
+            // Check if URL is valid (should contain music-related paths)
+            const url = (track.url || track.pageUrl || '').toLowerCase();
+            if (url) {
+                // For tiarin: must be album, single, playlist, or hashtag
+                if (track.source === 'tiarin') {
+                    if (!url.includes('/album/') && !url.includes('/single/') && 
+                        !url.includes('/playlist/') && !url.includes('/hashtag/')) {
+                        return false;
+                    }
+                    // Exclude genre, mood, publisher pages
+                    if (url.includes('/genre/') || url.includes('/mood/') || url.includes('/publisher/')) {
+                        return false;
+                    }
+                }
+                // For melovaz: basic URL validation (less strict)
+                if (track.source === 'melovaz') {
+                    if (!url.includes('melovaz.ir')) {
+                        return false;
+                    }
+                    // Only exclude obvious non-music pages
+                    if (url.includes('/category/') && !url.includes('/music/')) {
+                        return false;
+                    }
+                }
+                // For tehran: basic URL validation (less strict)
+                if (track.source === 'tehran') {
+                    if (!url.includes('mytehranmusic.com')) {
+                        return false;
+                    }
+                }
+            }
+            
+            // For tiarin only: apply strict relevance filtering
+            // (melovaz and tehran are trusted sources, show all valid results)
+            if (track.source === 'tiarin') {
+                const score = this.calculateRelevanceScore(query, track);
+                // Filter out results with very low relevance
+                if (score < 50) {
+                    return false;
+                }
+                
+                // Additional check: if query has multiple words, at least one should match
+                if (queryWords.length > 1) {
+                    const titleLower = track.title.toLowerCase();
+                    const artistLower = track.artist.toLowerCase();
+                    const hasMatch = queryWords.some(word => 
+                        titleLower.includes(word) || artistLower.includes(word)
+                    );
+                    if (!hasMatch) {
+                        return false;
+                    }
+                }
+            }
+            
+            return true;
+        });
+    }
+    
+    // Sort search results by relevance
+    sortResultsByRelevance(query, results) {
+        if (!query || !results || results.length === 0) return results;
+        
+        return results.slice().sort((a, b) => {
+            const scoreA = this.calculateRelevanceScore(query, a);
+            const scoreB = this.calculateRelevanceScore(query, b);
+            return scoreB - scoreA; // Descending order (highest score first)
+        });
+    }
+
+    // Filter results by type
+    filterResultsByType(results, filterType) {
+        if (!results || results.length === 0) return results;
+        if (filterType === 'all') return results;
+        
+        return results.filter(track => {
+            const u = (track.url || track.pageUrl || '').toLowerCase();
+            if (filterType === 'tracks') {
+                return !track.isAlbumOrPlaylist;
+            } else if (filterType === 'albums') {
+                if (!track.isAlbumOrPlaylist) return false;
+                if (u.includes('/album/')) return true;
+                if (track.source === 'melovaz' && track.title && /^آلبوم\s*:?\s*/i.test(track.title)) return true;
+                return false;
+            } else if (filterType === 'playlists') {
+                if (!track.isAlbumOrPlaylist) return false;
+                if (u.includes('/playlist/') || u.includes('/hashtag/')) return true;
+                if (track.source === 'melovaz' && track.title && !/^آلبوم\s*:?\s*/i.test(track.title)) return true;
+                return false;
+            }
+            return true;
+        });
+    }
+
+    // Sort results by different criteria
+    sortResults(results, sortBy, query) {
+        if (!results || results.length === 0) return results;
+        
+        const sorted = results.slice();
+        
+        if (sortBy === 'relevance') {
+            return this.sortResultsByRelevance(query, sorted);
+        } else if (sortBy === 'newest') {
+            // Sort by ID (assuming higher ID = newer) - fallback to relevance
+            return sorted.sort((a, b) => {
+                const idA = parseInt(a.id?.split('-').pop() || '0', 10);
+                const idB = parseInt(b.id?.split('-').pop() || '0', 10);
+                return idB - idA;
+            });
+        } else if (sortBy === 'popular') {
+            // For now, use relevance as popularity proxy
+            // In future, could add view count or play count
+            return this.sortResultsByRelevance(query, sorted);
+        }
+        
+        return sorted;
+    }
+
+    // Apply filters and sort, then display
+    applyFiltersAndSort() {
+        if (!this.searchResults || this.searchResults.length === 0) {
+            this.displaySearchResultsMain([], true);
+            return;
+        }
+
+        let filtered = this.filterResultsByType(this.searchResults, this.searchFilterType);
+        filtered = this.sortResults(filtered, this.searchSortBy, this.currentSearchQuery);
+        this.displaySearchResultsMain(filtered, true);
+    }
+
     searchMain() {
         const query = this.searchInput.value.trim();
         if (!query) {
@@ -6745,6 +7131,10 @@ class MusicPlayer {
         if (this.searchLoadingIndicator) {
             this.searchLoadingIndicator.style.display = 'flex';
         }
+        // Show skeleton loading in results container
+        if (this.resultsContainerMain) {
+            this.showSkeletonLoading(12);
+        }
         this.hideError();
 
         // Reset pagination for new search
@@ -6753,6 +7143,72 @@ class MusicPlayer {
         this.hasMoreResults = true;
         this.isLoadingMore = false;
 
+        if (this.currentSearchSource === SEARCH_SOURCES.all) {
+            this.hasMoreResults = false; // no infinite scroll in "all" mode
+            const allResults = [];
+            const sourceCounts = { tehran: 0, melovaz: 0, tiarin: 0 };
+            const normalize = (result) => {
+                if (Array.isArray(result)) return result;
+                if (result && typeof result === 'object' && result.results) return result.results || [];
+                return [];
+            };
+            const updateResultCountsFromList = (list) => {
+                const counts = { tehran: 0, melovaz: 0, tiarin: 0 };
+                (list || []).forEach(r => {
+                    if (r.source === 'tehran') counts.tehran++;
+                    else if (r.source === 'melovaz') counts.melovaz++;
+                    else if (r.source === 'tiarin') counts.tiarin++;
+                });
+                this.updateResultCountDisplay(counts);
+            };
+            const done = () => {
+                const filtered = this.filterInvalidResults(query, allResults);
+                const sortedResults = this.sortResultsByRelevance(query, filtered);
+                this.searchResults = sortedResults;
+                updateResultCountsFromList(sortedResults);
+                this.applyFiltersAndSort();
+                if (this.searchLoadingIndicator) this.searchLoadingIndicator.style.display = 'none';
+                const loader = document.getElementById('infiniteScrollLoader');
+                if (loader) loader.style.display = 'none';
+            };
+            const p1 = this.fetchSearchResults(query, 1).then(r => normalize(r)).catch(() => []);
+            const p2 = this.fetchSearchResultsMelovaz(query, 1).then(r => normalize(r)).catch(() => []);
+            const p3 = this.fetchSearchResultsTiarin(query, 1).then(r => normalize(r)).catch(() => []);
+            // Progressive: show results as each source returns (filtered and sorted)
+            p1.then(list => {
+                if (list.length) {
+                    allResults.push(...list);
+                    const filtered = this.filterInvalidResults(query, allResults);
+                    const sorted = this.sortResultsByRelevance(query, filtered);
+                    this.searchResults = sorted;
+                    updateResultCountsFromList(sorted);
+                    this.applyFiltersAndSort();
+                }
+            });
+            p2.then(list => {
+                if (list.length) {
+                    allResults.push(...list);
+                    const filtered = this.filterInvalidResults(query, allResults);
+                    const sorted = this.sortResultsByRelevance(query, filtered);
+                    this.searchResults = sorted;
+                    updateResultCountsFromList(sorted);
+                    this.applyFiltersAndSort();
+                }
+            });
+            p3.then(list => {
+                if (list.length) {
+                    allResults.push(...list);
+                    const filtered = this.filterInvalidResults(query, allResults);
+                    const sorted = this.sortResultsByRelevance(query, filtered);
+                    this.searchResults = sorted;
+                    updateResultCountsFromList(sorted);
+                    this.applyFiltersAndSort();
+                }
+            });
+            Promise.allSettled([p1, p2, p3]).then(() => done());
+            return;
+        }
+
         const fetchPromise = this.currentSearchSource === SEARCH_SOURCES.melovaz
             ? this.fetchSearchResultsMelovaz(query, 1)
             : this.currentSearchSource === SEARCH_SOURCES.tiarin
@@ -6760,34 +7216,27 @@ class MusicPlayer {
                 : this.fetchSearchResults(query, 1);
 
         fetchPromise.then(result => {
-            console.log('Search results received:', result);
-            console.log('Result type:', typeof result, 'Is array:', Array.isArray(result));
-            
-            // Handle both old format (array) and new format (object)
             let results = [];
             let hasMore = false;
-            
             if (Array.isArray(result)) {
-                // Old format - direct array (fallback)
-                console.log('Received array format, converting...');
                 results = result;
-                hasMore = true; // Assume there might be more
+                hasMore = true;
             } else if (result && typeof result === 'object' && result.results) {
-                // New format - object with results and hasMore
                 results = result.results || [];
                 hasMore = result.hasMore !== undefined ? result.hasMore : true;
             } else {
-                console.error('Unexpected result format:', result);
                 results = [];
                 hasMore = false;
             }
-            
-            console.log(`Extracted ${results.length} results, hasMore: ${hasMore}`);
-            console.log('First result:', results[0]);
-            
             this.searchResults = results;
             this.hasMoreResults = hasMore;
-            this.displaySearchResultsMain(this.searchResults, true);
+            // Update result count for single source
+            if (this.currentSearchSource !== SEARCH_SOURCES.all) {
+                const counts = {};
+                counts[this.currentSearchSource] = results.length;
+                this.updateResultCountDisplay(counts);
+            }
+            this.applyFiltersAndSort();
             if (this.searchLoadingIndicator) {
                 this.searchLoadingIndicator.style.display = 'none';
             }
@@ -6800,6 +7249,29 @@ class MusicPlayer {
                 this.searchLoadingIndicator.style.display = 'none';
             }
         });
+    }
+
+    showSkeletonLoading(count = 12) {
+        if (!this.resultsContainerMain) return;
+        
+        this.resultsContainerMain.innerHTML = '';
+        for (let i = 0; i < count; i++) {
+            const skeleton = document.createElement('div');
+            skeleton.className = 'track-item skeleton-track-item';
+            skeleton.innerHTML = `
+                <div class="track-image skeleton skeleton-image"></div>
+                <div class="track-info skeleton-info">
+                    <div class="skeleton skeleton-line skeleton-title"></div>
+                    <div class="skeleton skeleton-line skeleton-artist"></div>
+                </div>
+                <div class="track-actions skeleton-actions">
+                    <div class="skeleton skeleton-button"></div>
+                    <div class="skeleton skeleton-button"></div>
+                    <div class="skeleton skeleton-button"></div>
+                </div>
+            `;
+            this.resultsContainerMain.appendChild(skeleton);
+        }
     }
 
     displaySearchResultsMain(results, clear = false) {
@@ -6978,6 +7450,350 @@ class MusicPlayer {
         this.showToast('همه جستجوهای اخیر حذف شد', 'success');
     }
 
+    showAutocompleteSuggestions(query) {
+        if (!this.autocompleteDropdown || !this.searchHistory || this.searchHistory.length === 0) {
+            this.hideAutocomplete();
+            return;
+        }
+
+        const normalizedQuery = query.toLowerCase().trim();
+        if (normalizedQuery.length === 0) {
+            this.hideAutocomplete();
+            return;
+        }
+
+        // Filter search history for suggestions
+        const suggestions = this.searchHistory
+            .filter(item => item.toLowerCase().includes(normalizedQuery))
+            .slice(0, 5); // Max 5 suggestions
+
+        if (suggestions.length === 0) {
+            this.hideAutocomplete();
+            return;
+        }
+
+        // Build dropdown HTML
+        this.autocompleteDropdown.innerHTML = '';
+        suggestions.forEach((suggestion, index) => {
+            const item = document.createElement('div');
+            item.className = 'autocomplete-item';
+            if (index === 0) item.classList.add('selected');
+            item.textContent = suggestion;
+            item.addEventListener('click', () => {
+                this.selectAutocompleteSuggestion(index);
+            });
+            item.addEventListener('mouseenter', () => {
+                this.autocompleteSelectedIndex = index;
+                this.updateAutocompleteSelection();
+            });
+            this.autocompleteDropdown.appendChild(item);
+        });
+
+        this.autocompleteSelectedIndex = 0;
+        this.autocompleteDropdown.style.display = 'block';
+    }
+
+    hideAutocomplete() {
+        if (this.autocompleteDropdown) {
+            this.autocompleteDropdown.style.display = 'none';
+            this.autocompleteSelectedIndex = -1;
+        }
+    }
+
+    navigateAutocomplete(direction) {
+        if (!this.autocompleteDropdown || this.autocompleteDropdown.style.display === 'none') {
+            return;
+        }
+
+        const items = this.autocompleteDropdown.querySelectorAll('.autocomplete-item');
+        if (items.length === 0) return;
+
+        this.autocompleteSelectedIndex += direction;
+        if (this.autocompleteSelectedIndex < 0) {
+            this.autocompleteSelectedIndex = items.length - 1;
+        } else if (this.autocompleteSelectedIndex >= items.length) {
+            this.autocompleteSelectedIndex = 0;
+        }
+
+        this.updateAutocompleteSelection();
+        // Scroll into view
+        items[this.autocompleteSelectedIndex].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+
+    updateAutocompleteSelection() {
+        const items = this.autocompleteDropdown.querySelectorAll('.autocomplete-item');
+        items.forEach((item, index) => {
+            if (index === this.autocompleteSelectedIndex) {
+                item.classList.add('selected');
+            } else {
+                item.classList.remove('selected');
+            }
+        });
+    }
+
+    selectAutocompleteSuggestion(index) {
+        const items = this.autocompleteDropdown.querySelectorAll('.autocomplete-item');
+        if (index >= 0 && index < items.length) {
+            const suggestion = items[index].textContent;
+            this.searchInput.value = suggestion;
+            this.hideAutocomplete();
+            this.searchMain();
+        }
+    }
+
+    startVoiceSearch() {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            this.showToast('جستجوی صوتی در این مرورگر پشتیبانی نمی‌شود', 'info');
+            return;
+        }
+
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'fa-IR';
+        recognition.continuous = false;
+        recognition.interimResults = false;
+
+        const voiceBtn = document.getElementById('voiceSearchBtn');
+        if (voiceBtn) voiceBtn.classList.add('recording');
+
+        recognition.onresult = (e) => {
+            const transcript = (e.results[0][0].transcript || '').trim();
+            if (transcript && this.searchInput) {
+                this.searchInput.value = transcript;
+                this.hideAutocomplete();
+                this.searchMain();
+            }
+            if (voiceBtn) voiceBtn.classList.remove('recording');
+        };
+
+        recognition.onerror = (e) => {
+            if (e.error === 'not-allowed') {
+                this.showToast('دسترسی به میکروفون مجاز نیست', 'info');
+            } else {
+                this.showToast('جستجوی صوتی متوقف شد', 'info');
+            }
+            if (voiceBtn) voiceBtn.classList.remove('recording');
+        };
+
+        recognition.onend = () => {
+            if (voiceBtn) voiceBtn.classList.remove('recording');
+        };
+
+        try {
+            recognition.start();
+            this.showToast('گوش می‌دهم...', 'info');
+        } catch (err) {
+            this.showToast('شروع جستجوی صوتی ناموفق بود', 'info');
+            if (voiceBtn) voiceBtn.classList.remove('recording');
+        }
+    }
+
+    setupPullToRefresh() {
+        if (!this.searchPageContent) return;
+
+        let touchStartY = 0;
+        let touchCurrentY = 0;
+        let isPulling = false;
+
+        this.searchPageContent.addEventListener('touchstart', (e) => {
+            if (this.currentPage !== 'search') return;
+            if (window.scrollY > 0) return; // Only work when at top
+            
+            touchStartY = e.touches[0].clientY;
+            isPulling = false;
+        }, { passive: true });
+
+        this.searchPageContent.addEventListener('touchmove', (e) => {
+            if (this.currentPage !== 'search') return;
+            if (window.scrollY > 0) return;
+            
+            touchCurrentY = e.touches[0].clientY;
+            const deltaY = touchCurrentY - touchStartY;
+
+            if (deltaY > 0 && !isPulling) {
+                isPulling = true;
+            }
+
+            if (isPulling && deltaY > 0) {
+                e.preventDefault();
+                const pullDistance = Math.min(deltaY, this.pullToRefreshThreshold * 1.5);
+                
+                if (pullDistance > 20) {
+                    if (this.pullToRefreshIndicator) {
+                        this.pullToRefreshIndicator.style.display = 'flex';
+                        const opacity = Math.min(pullDistance / this.pullToRefreshThreshold, 1);
+                        this.pullToRefreshIndicator.style.opacity = opacity;
+                        
+                        if (pullDistance >= this.pullToRefreshThreshold) {
+                            this.pullToRefreshIndicator.querySelector('span').textContent = 'رها کنید تا جستجو مجدد انجام شود';
+                        } else {
+                            this.pullToRefreshIndicator.querySelector('span').textContent = 'کشیدن برای جستجوی مجدد';
+                        }
+                    }
+                }
+            }
+        }, { passive: false });
+
+        this.searchPageContent.addEventListener('touchend', (e) => {
+            if (this.currentPage !== 'search') return;
+            if (!isPulling) return;
+
+            const deltaY = touchCurrentY - touchStartY;
+            
+            if (deltaY >= this.pullToRefreshThreshold && this.currentSearchQuery) {
+                // Trigger refresh
+                this.searchMain();
+            }
+
+            // Reset
+            isPulling = false;
+            touchStartY = 0;
+            touchCurrentY = 0;
+            
+            if (this.pullToRefreshIndicator) {
+                this.pullToRefreshIndicator.style.display = 'none';
+                this.pullToRefreshIndicator.style.opacity = '0';
+            }
+        }, { passive: true });
+    }
+
+    updateResultCountDisplay(counts) {
+        const resultCountsEl = document.getElementById('resultCounts');
+        if (!resultCountsEl) return;
+
+        if (this.currentSearchSource === SEARCH_SOURCES.all) {
+            const sourceLabels = { tehran: 'تهران موزیک', melovaz: 'ملواز', tiarin: 'تیارین' };
+            const parts = [];
+            Object.keys(counts).forEach(source => {
+                if (counts[source] > 0) {
+                    parts.push(`${sourceLabels[source]}: ${counts[source]}`);
+                }
+            });
+            if (parts.length > 0) {
+                resultCountsEl.textContent = parts.join(' • ');
+                resultCountsEl.style.display = 'block';
+            } else {
+                resultCountsEl.style.display = 'none';
+            }
+        } else {
+            // Single source: show total count
+            const total = counts[this.currentSearchSource] || 0;
+            if (total > 0) {
+                resultCountsEl.textContent = `${total} نتیجه`;
+                resultCountsEl.style.display = 'block';
+            } else {
+                resultCountsEl.style.display = 'none';
+            }
+        }
+    }
+
+    showSleepTimerMenu() {
+        const options = [
+            { minutes: 15, label: '15 دقیقه' },
+            { minutes: 30, label: '30 دقیقه' },
+            { minutes: 60, label: '1 ساعت' },
+            { minutes: 90, label: '1.5 ساعت' },
+            { minutes: 0, label: 'خاموش' }
+        ];
+
+        const menu = document.createElement('div');
+        menu.className = 'sleep-timer-menu';
+        menu.innerHTML = options.map(opt => 
+            `<button class="sleep-timer-option ${this.sleepTimerMinutes === opt.minutes ? 'active' : ''}" data-minutes="${opt.minutes}">
+                ${opt.label}
+            </button>`
+        ).join('');
+
+        // Remove existing menu if any
+        const existingMenu = document.querySelector('.sleep-timer-menu');
+        if (existingMenu) existingMenu.remove();
+
+        document.body.appendChild(menu);
+
+        // Position menu near button
+        const rect = this.sleepTimerBtn.getBoundingClientRect();
+        menu.style.top = (rect.bottom + 8) + 'px';
+        menu.style.right = (window.innerWidth - rect.right) + 'px';
+
+        // Handle clicks
+        menu.querySelectorAll('.sleep-timer-option').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const minutes = parseInt(e.target.dataset.minutes, 10);
+                this.setSleepTimer(minutes);
+                menu.remove();
+            });
+        });
+
+        // Close on outside click
+        setTimeout(() => {
+            document.addEventListener('click', function closeMenu(e) {
+                if (!menu.contains(e.target) && e.target !== this.sleepTimerBtn) {
+                    menu.remove();
+                    document.removeEventListener('click', closeMenu);
+                }
+            }.bind(this));
+        }, 100);
+    }
+
+    setSleepTimer(minutes) {
+        // Clear existing timer
+        if (this.sleepTimerInterval) {
+            clearInterval(this.sleepTimerInterval);
+            this.sleepTimerInterval = null;
+        }
+
+        this.sleepTimerMinutes = minutes;
+
+        if (minutes === 0) {
+            // Turn off
+            if (this.sleepTimerBtn) {
+                this.sleepTimerBtn.classList.remove('active');
+                this.sleepTimerBtn.title = 'تایمر خواب';
+            }
+            this.showToast('تایمر خواب خاموش شد', 'info');
+            return;
+        }
+
+        // Set timer
+        const endTime = Date.now() + (minutes * 60 * 1000);
+        
+        if (this.sleepTimerBtn) {
+            this.sleepTimerBtn.classList.add('active');
+            this.updateSleepTimerDisplay(endTime);
+        }
+
+        this.sleepTimerInterval = setInterval(() => {
+            const remaining = endTime - Date.now();
+            
+            if (remaining <= 0) {
+                // Time's up - pause playback
+                if (this.audioPlayer && !this.audioPlayer.paused) {
+                    this.pause();
+                }
+                this.setSleepTimer(0);
+                this.showToast('تایمر خواب به پایان رسید', 'info');
+            } else {
+                this.updateSleepTimerDisplay(endTime);
+            }
+        }, 1000);
+
+        this.showToast(`تایمر خواب روی ${minutes} دقیقه تنظیم شد`, 'success');
+    }
+
+    updateSleepTimerDisplay(endTime) {
+        if (!this.sleepTimerBtn) return;
+        
+        const remaining = Math.max(0, endTime - Date.now());
+        const minutes = Math.floor(remaining / 60000);
+        const seconds = Math.floor((remaining % 60000) / 1000);
+        
+        if (minutes > 0) {
+            this.sleepTimerBtn.title = `تایمر خواب: ${minutes}:${seconds.toString().padStart(2, '0')}`;
+        } else {
+            this.sleepTimerBtn.title = `تایمر خواب: ${seconds} ثانیه`;
+        }
+    }
+
     displayCustomPlaylistsMain() {
         if (!this.playlistsListMain) {
             console.error('playlistsListMain not found');
@@ -7152,14 +7968,16 @@ class MusicPlayer {
     addToRecentTracks(track) {
         // Remove if already exists (by id or by URL)
         this.recentTracks = this.recentTracks.filter(t => t.id !== track.id && !this.isSameTrackByUrl(t, track));
-        // Add to beginning
-        this.recentTracks.unshift({...track});
+        // Add to beginning with playedAt for smart playlist (آهنگ‌های اخیر ۷ روز)
+        const trackWithTime = { ...track, playedAt: track.playedAt || Date.now() };
+        this.recentTracks.unshift(trackWithTime);
         // Keep only last 50
         this.recentTracks = this.recentTracks.slice(0, 50);
         this.saveRecentData();
         
         if (this.currentPage === 'home') {
             this.displayRecentTracks();
+            this.displayRecentTracksLast7Days();
         }
     }
 
