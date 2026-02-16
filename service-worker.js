@@ -1,7 +1,9 @@
 // Service Worker for xPlayer PWA
 const APP_SHELL_CACHE_NAME = 'xplayer-app-shell-v1';
 const AUDIO_CACHE_NAME = 'mytehran-audio-v1';
+const IMAGE_CACHE_NAME = 'xplayer-images-v1';
 const MAX_AUDIO_CACHE_SIZE = 50 * 1024 * 1024; // 50MB limit for audio cache
+const FETCH_TIMEOUT_MS = 4000; // وقتی اینترنت ضعیف/قطع است زود به کش برگردیم
 
 // App shell files - pre-cached for offline use (when internet is completely off)
 function getAppShellUrls() {
@@ -69,34 +71,49 @@ self.addEventListener('fetch', (event) => {
                      url.pathname === '/' ||
                      (url.pathname.endsWith('/') && url.hostname === self.location.hostname);
   
-  // App shell: network-first, fallback to pre-cached version for offline
+  // App shell: cache-first برای لود فوری و کار آفلاین؛ در پس‌زمینه fetch با timeout
   if (isCodeFile && url.origin === self.location.origin) {
     event.respondWith(
-      fetch(event.request).then((response) => {
-        if (response.status === 200) {
-          const clone = response.clone();
-          caches.open(APP_SHELL_CACHE_NAME).then((cache) => cache.put(event.request, clone));
-        }
-        return response;
-      }).catch(() => {
-        // Offline: serve from pre-cached app shell
-        return caches.open(APP_SHELL_CACHE_NAME).then((cache) => {
-          return cache.match(event.request).then((cached) => {
-            if (cached) return cached;
-            // Fallback: for "/" or root, try index.html
-            if (url.pathname === '/' || url.pathname === '') {
-              const indexUrl = new URL('index.html', url.origin + '/');
-              return cache.match(indexUrl);
-            }
-            return null;
-          });
-        }).then((cached) => {
+      caches.open(APP_SHELL_CACHE_NAME).then((cache) => {
+        const fromCache = cache.match(event.request).then((cached) => {
           if (cached) return cached;
-          // No cache - show minimal offline message (shouldn't happen if install succeeded)
-          return new Response(
+          if (url.pathname === '/' || url.pathname === '') {
+            return cache.match(new URL('index.html', url.origin + '/'));
+          }
+          return null;
+        });
+        const fromNetwork = new Promise((resolve, reject) => {
+          const t = setTimeout(() => reject(new Error('timeout')), FETCH_TIMEOUT_MS);
+          fetch(event.request)
+            .then((response) => {
+              clearTimeout(t);
+              if (response.status === 200) {
+                const clone = response.clone();
+                cache.put(event.request, clone).catch(() => {});
+              }
+              resolve(response);
+            })
+            .catch((err) => {
+              clearTimeout(t);
+              reject(err);
+            });
+        });
+        return fromCache.then((cached) => {
+          if (cached) {
+            fromNetwork.catch(() => {}); // به‌روزرسانی در پس‌زمینه
+            return cached;
+          }
+          return fromNetwork;
+        }).catch(() => fromCache);
+      }).then((response) => {
+        if (response) return response;
+        return caches.open(APP_SHELL_CACHE_NAME).then((cache) => {
+          const fallback = url.pathname === '/' || url.pathname === '' ?
+            cache.match(new URL('index.html', url.origin + '/')) : cache.match(event.request);
+          return fallback.then((c) => c || new Response(
             '<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><title>xPlayer</title></head><body style="font-family:sans-serif;padding:20px;text-align:center"><h1>آفلاین</h1><p>لطفاً اتصال اینترنت را روشن کنید و یک‌بار برنامه را با اینترنت باز کنید تا برای استفاده آفلاین آماده شود.</p></body></html>',
             { headers: { 'Content-Type': 'text/html; charset=utf-8' } }
-          );
+          ));
         });
       })
     );
@@ -157,17 +174,32 @@ self.addEventListener('fetch', (event) => {
         });
       })
     );
-  } else {
-    // For other files (images, etc.), use network first
+  }
+  // عکس‌ها (کاور آهنگ‌ها): کش‌اول تا آفلاین هم لود بشوند
+  const isImageRequest = /\.(jpg|jpeg|png|gif|webp|avif)(\?|$)/i.test(url.pathname) ||
+    event.request.headers.get('Accept')?.includes('image/');
+  if (isImageRequest) {
     event.respondWith(
-      fetch(event.request, {
-        cache: 'no-store'
-      }).catch(() => {
-        // Try cache as fallback for non-code files
-        return caches.match(event.request);
+      caches.open(IMAGE_CACHE_NAME).then((cache) => {
+        return cache.match(event.request).then((cached) => {
+          if (cached) return cached;
+          return fetch(event.request).then((response) => {
+            if (response.ok && response.type === 'basic') {
+              try {
+                cache.put(event.request, response.clone());
+              } catch (_) {}
+            }
+            return response;
+          }).catch(() => cache.match(event.request));
+        });
       })
     );
+    return;
   }
+  // سایر درخواست‌ها
+  event.respondWith(
+    fetch(event.request, { cache: 'no-store' }).catch(() => caches.match(event.request))
+  );
 });
 
 // Clean up audio cache if it gets too large

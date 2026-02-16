@@ -30,6 +30,9 @@ class MusicPlayer {
         this.isPullToRefreshActive = false;
         this.sleepTimerMinutes = 0;
         this.sleepTimerInterval = null;
+        this.wakeLock = null; // برای پخش در پس‌زمینه وقتی صفحه قفل است
+        this.preloadAudio = null; // پیش‌بارگذاری آهنگ بعدی برای جلوگیری از قطع پخش
+        this.lastOutputDeviceIds = new Set(); // برای تشخیص قطع بلوتوث و توقف پخش
         this.customPlaylists = {}; // Initialize customPlaylists
         this.currentPlaylistId = null;
         this.nextPlaylistId = 1;
@@ -52,6 +55,7 @@ class MusicPlayer {
             this.setupNavigation();
             this.setupSettingsPage();
             this.setupOfflineIndicator();
+            this.setupBluetoothDisconnectHandler();
             this.setupKeyboardShortcuts();
             this.setupMediaSession();
             // handlePlayFromUrl must run AFTER setup so player page and elements are ready
@@ -3693,6 +3697,7 @@ class MusicPlayer {
             
             if (this.currentIndex >= this.playlist.length) {
                 this.currentIndex = -1;
+                this.releaseWakeLock();
                 this.audioPlayer.pause();
                 this.updatePlayingStateInAllViews();
                 // Hide bottom player bar if no track is playing
@@ -3791,10 +3796,9 @@ class MusicPlayer {
         this.updatePlayerPageFavoriteBtn();
         document.title = `${track.title || 'آهنگ'} - ${track.artist || 'ناشناس'} | xPlayer`;
         
-        // Update bottom player bar
-        if (this.playerBarImage) {
-            this.playerBarImage.src = track.image || 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23b3b3b3"%3E%3Cpath d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/%3E%3C/svg%3E';
-        }
+        // Update bottom player bar (کاور از کش وقتی آفلاین)
+        const imgPlaceholder = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23b3b3b3"%3E%3Cpath d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/%3E%3C/svg%3E';
+        this.setTrackImage(this.playerBarImage, track.image, imgPlaceholder);
         this.updateMediaSession?.();
         if (this.bottomPlayerBar) {
             this.bottomPlayerBar.style.display = 'flex';
@@ -3814,11 +3818,9 @@ class MusicPlayer {
             this.displayPlaylistTracks(this.playlist);
         }
         
-        // Update current track image
+        // Update current track image (کاور از کش وقتی آفلاین)
         const currentImageEl = document.getElementById('currentTrackImage');
-        if (currentImageEl) {
-            currentImageEl.src = track.image || 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23b3b3b3"%3E%3Cpath d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/%3E%3C/svg%3E';
-        }
+        this.setTrackImage(currentImageEl, track.image, imgPlaceholder);
         
         // Check if URL is a direct audio file (from data-music attribute)
         const audioUrl = track.url;
@@ -3902,6 +3904,8 @@ class MusicPlayer {
                 // Success - remove error handler and cache
                 this.audioPlayer.removeEventListener('error', handleAudioError);
                 this.cacheAudio(audioUrl);
+                this.requestWakeLock();
+                this.updateOutputDevicesForBluetoothCheck();
                 this.preloadNextTrack();
                 // Show bottom player bar - player section is in playerPage
                 if (this.bottomPlayerBar) {
@@ -3980,9 +3984,8 @@ class MusicPlayer {
                     this.updatePlayerPageFavoriteBtn();
                     document.title = `${track.title || 'آهنگ'} - ${track.artist || 'ناشناس'} | xPlayer`;
                     const imgPlaceholder = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23b3b3b3"%3E%3Cpath d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/%3E%3C/svg%3E';
-                    if (this.playerBarImage) this.playerBarImage.src = track.image || imgPlaceholder;
-                    const currentImageEl = document.getElementById('currentTrackImage');
-                    if (currentImageEl) currentImageEl.src = track.image || imgPlaceholder;
+                    this.setTrackImage(this.playerBarImage, track.image, imgPlaceholder);
+                    this.setTrackImage(document.getElementById('currentTrackImage'), track.image, imgPlaceholder);
                     this.updateMediaSession?.();
                     console.log('Extracted audio URL:', url);
                     track.url = url;
@@ -4013,6 +4016,8 @@ class MusicPlayer {
                                 if (this.audioPlayer.readyState >= 3) resolve();
                             });
                             await this.audioPlayer.play();
+                            this.requestWakeLock();
+                            this.updateOutputDevicesForBluetoothCheck();
                         } catch (e) {
                             if (e.name === 'NotAllowedError' || (e.message && (e.message.includes('play') || e.message.includes('user gesture')))) {
                                 hideLoading();
@@ -4036,6 +4041,8 @@ class MusicPlayer {
                         this.audioPlayer.addEventListener('error', onDirectError, { once: true });
                         this.audioPlayer.play().then(() => {
                             if (!directFailed) this.cacheAudio(url);
+                            this.requestWakeLock();
+                            this.updateOutputDevicesForBluetoothCheck();
                         }).catch((e) => {
                             if (e.name === 'NotAllowedError' || (e.message && (e.message.includes('play') || e.message.includes('user gesture')))) {
                                 hideLoading();
@@ -4753,15 +4760,54 @@ class MusicPlayer {
         return { title: title || null, artist: artist || null, image: image || null };
     }
 
+    async requestWakeLock() {
+        if (this.wakeLock) return;
+        try {
+            if ('wakeLock' in navigator) {
+                this.wakeLock = await navigator.wakeLock.request('screen');
+                this.wakeLock.addEventListener('release', () => { this.wakeLock = null; });
+            }
+        } catch (_) {}
+    }
+    releaseWakeLock() {
+        try {
+            if (this.wakeLock) {
+                this.wakeLock.release();
+                this.wakeLock = null;
+            }
+        } catch (_) {}
+    }
+    setTrackImage(imgEl, imageUrl, placeholder) {
+        const ph = placeholder || 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23b3b3b3"%3E%3Cpath d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/%3E%3C/svg%3E';
+        if (!imgEl) return;
+        if (!imageUrl || !imageUrl.startsWith('http')) {
+            imgEl.src = ph;
+            return;
+        }
+        if (!navigator.onLine && 'caches' in window) {
+            caches.open('xplayer-images-v1').then((cache) => cache.match(imageUrl)).then((cached) => {
+                if (cached) return cached.blob().then((b) => { imgEl.src = URL.createObjectURL(b); });
+                imgEl.src = ph;
+            }).catch(() => { imgEl.src = ph; });
+            return;
+        }
+        imgEl.src = imageUrl;
+        if ('caches' in window) {
+            fetch(imageUrl, { mode: 'cors' }).then((r) => {
+                if (r.ok) caches.open('xplayer-images-v1').then((c) => c.put(imageUrl, r));
+            }).catch(() => {});
+        }
+    }
     togglePlayPause() {
         if (this.audioPlayer.paused) {
             if (this.currentIndex === -1 && this.playlist.length > 0) {
                 this.currentIndex = 0;
                 this.loadAndPlay(this.playlist[0]);
             } else {
-                this.audioPlayer.play();
+                this.audioPlayer.play().then(() => this.updateOutputDevicesForBluetoothCheck()).catch(() => {});
             }
         } else {
+            this.releaseWakeLock();
             this.audioPlayer.pause();
         }
         this.updatePlayButton();
@@ -4795,6 +4841,7 @@ class MusicPlayer {
 
         // If we've wrapped around to the first track (from last) and repeat all is off, stop
         if (this.currentIndex === 0 && previousIndex === this.playlist.length - 1 && this.repeatMode !== 2 && !this.isShuffle) {
+            this.releaseWakeLock();
             this.audioPlayer.pause();
             this.currentIndex = this.playlist.length - 1; // Stay on last track
             return;
@@ -5877,7 +5924,12 @@ class MusicPlayer {
         const nextTrack = nextIdx >= 0 && nextIdx < this.playlist.length ? this.playlist[nextIdx] : null;
         if (!nextTrack?.url) return;
         const url = nextTrack.url;
-        if (url.endsWith('.mp3') || url.endsWith('.m4a') || url.includes('dl.mytehranmusic.com')) {
+        const isDirect = url.endsWith('.mp3') || url.endsWith('.m4a') || url.endsWith('.ogg') || url.includes('dl.mytehranmusic.com');
+        if (isDirect) {
+            if (!this.preloadAudio) this.preloadAudio = new Audio();
+            this.preloadAudio.src = url;
+            this.preloadAudio.load();
+        } else {
             fetch(url).catch(() => {});
         }
     }
@@ -5938,6 +5990,7 @@ class MusicPlayer {
         if (confirm('آیا مطمئن هستید که می‌خواهید پلی‌لیست را پاک کنید؟')) {
             this.playlist = [];
             this.currentIndex = -1;
+            this.releaseWakeLock();
             this.audioPlayer.pause();
             this.audioPlayer.src = '';
             this.updatePlayingStateInAllViews();
@@ -7081,6 +7134,40 @@ class MusicPlayer {
         window.addEventListener('online', update);
         window.addEventListener('offline', update);
         update();
+    }
+
+    async getAudioOutputDeviceIds() {
+        const ids = new Set();
+        try {
+            if (!navigator.mediaDevices || typeof navigator.mediaDevices.enumerateDevices !== 'function') return ids;
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            devices.filter((d) => d.kind === 'audiooutput').forEach((d) => ids.add(d.deviceId));
+        } catch (_) {}
+        return ids;
+    }
+    updateOutputDevicesForBluetoothCheck() {
+        this.getAudioOutputDeviceIds().then((ids) => {
+            this.lastOutputDeviceIds = ids;
+        }).catch(() => {});
+    }
+    setupBluetoothDisconnectHandler() {
+        try {
+            if (!navigator.mediaDevices || typeof navigator.mediaDevices.addEventListener !== 'function') return;
+            navigator.mediaDevices.addEventListener('devicechange', () => {
+                if (!this.audioPlayer || this.audioPlayer.paused) return;
+                if (this.lastOutputDeviceIds.size === 0) return;
+                this.getAudioOutputDeviceIds().then((currentIds) => {
+                    const removed = [...this.lastOutputDeviceIds].filter((id) => !currentIds.has(id));
+                    if (removed.length > 0) {
+                        this.audioPlayer.pause();
+                        this.releaseWakeLock();
+                        this.updatePlayButton();
+                        this.showToast('اتصال بلوتوث قطع شد؛ پخش متوقف شد', 'info');
+                    }
+                    this.lastOutputDeviceIds = currentIds;
+                }).catch(() => {});
+            });
+        } catch (_) {}
     }
 
     setupKeyboardShortcuts() {
