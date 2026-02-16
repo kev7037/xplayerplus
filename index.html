@@ -155,10 +155,14 @@
                         <h1>اکسپلور</h1>
                         <div class="header-spacer"></div>
                     </div>
-                    
+                    <div class="explore-source-tabs" id="exploreSourceTabs" role="tablist">
+                        <button type="button" class="explore-source-tab active" data-source="tehran" id="exploreSourceTehran" aria-selected="true">تهران موزیک</button>
+                        <button type="button" class="explore-source-tab" data-source="melovaz" id="exploreSourceMelovaz" aria-selected="false">ملواز</button>
+                        <button type="button" class="explore-source-tab" data-source="tiarin" id="exploreSourceTiarin" aria-selected="false">تیارین</button>
+                    </div>
                     <section class="content-section">
-                        <!-- Latest Tracks Section -->
-                        <div class="explore-section">
+                        <!-- Tehran Music Sections -->
+                        <div class="explore-section" data-source="tehran">
                             <div class="explore-section-header">
                                 <h2 class="explore-section-title">آهنگ‌های جدید</h2>
                             </div>
@@ -173,8 +177,7 @@
                             </div>
                         </div>
                         
-                        <!-- Top Monthly Section -->
-                        <div class="explore-section">
+                        <div class="explore-section" data-source="tehran">
                             <div class="explore-section-header">
                                 <h2 class="explore-section-title">برترین‌های ماه</h2>
                             </div>
@@ -189,14 +192,135 @@
                             </div>
                         </div>
                         
-                        <!-- Podcasts Section -->
-                        <div class="explore-section">
+                        <div class="explore-section" data-source="tehran">
                             <div class="explore-section-header">
                                 <h2 class="explore-section-title">پادکست‌ها</h2>
                             </div>
                             <div class="explore-items-container" id="podcastsContainer">
                                 <div class="explore-items-scroll">
                                     <div class="explore-items-list" id="podcastsList">
+                                        <div class="explore-loading">
+                                            <div class="spinner spinner-small"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Melovaz Sections -->
+                        <div class="explore-section" data-source="melovaz" style="display: none;">
+                            <div class="explore-section-header">
+                                <h2 class="explore-section-title">آلبوم‌ها</h2>
+                            </div>
+                            <div class="explore-items-container" id="melovazAlbumsContainer">
+                                <div class="explore-items-scroll">
+                                    <div class="explore-items-list" id="melovazAlbumsList">
+                                        <div class="explore-loading">
+                                            <div class="spinner spinner-small"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="explore-section" data-source="melovaz" style="display: none;">
+                            <div class="explore-section-header">
+                                <h2 class="explore-section-title">تک‌آهنگ‌ها</h2>
+                            </div>
+                            <div class="explore-items-container" id="melovazSinglesContainer">
+                                <div class="explore-items-scroll">
+                                    <div class="explore-items-list" id="melovazSinglesList">
+                                        <div class="explore-loading">
+                                            <div class="spinner spinner-small"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="explore-section" data-source="melovaz" style="display: none;">
+                            <div class="explore-section-header">
+                                <h2 class="explore-section-title">پلی‌لیست‌ها</h2>
+                            </div>
+                            <div class="explore-items-container" id="melovazPlaylistsContainer">
+                                <div class="explore-items-scroll">
+                                    <div class="explore-items-list" id="melovazPlaylistsList">
+                                        <div class="explore-loading">
+                                            <div class="spinner spinner-small"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Tiarin Sections -->
+                        <div class="explore-section" data-source="tiarin" style="display: none;">
+                            <div class="explore-section-header">
+                                <h2 class="explore-section-title">جدیدترین‌ها</h2>
+                            </div>
+                            <div class="explore-items-container" id="tiarinLatestContainer">
+                                <div class="explore-items-scroll">
+                                    <div class="explore-items-list" id="tiarinLatestList">
+                                        <div class="explore-loading">
+                                            <div class="spinner spinner-small"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="explore-section" data-source="tiarin" style="display: none;">
+                            <div class="explore-section-header">
+                                <h2 class="explore-section-title">برترین‌ها</h2>
+                            </div>
+                            <div class="explore-items-container" id="tiarinTopContainer">
+                                <div class="explore-items-scroll">
+                                    <div class="explore-items-list" id="tiarinTopList">
+                                        <div class="explore-loading">
+                                            <div class="spinner spinner-small"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="explore-section" data-source="tiarin" style="display: none;">
+                            <div class="explore-section-header">
+                                <h2 class="explore-section-title">تک‌آهنگ‌ها</h2>
+                            </div>
+                            <div class="explore-items-container" id="tiarinSinglesContainer">
+                                <div class="explore-items-scroll">
+                                    <div class="explore-items-list" id="tiarinSinglesList">
+                                        <div class="explore-loading">
+                                            <div class="spinner spinner-small"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="explore-section" data-source="tiarin" style="display: none;">
+                            <div class="explore-section-header">
+                                <h2 class="explore-section-title">پلی‌لیست‌ها</h2>
+                            </div>
+                            <div class="explore-items-container" id="tiarinPlaylistsContainer">
+                                <div class="explore-items-scroll">
+                                    <div class="explore-items-list" id="tiarinPlaylistsList">
+                                        <div class="explore-loading">
+                                            <div class="spinner spinner-small"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="explore-section" data-source="tiarin" style="display: none;">
+                            <div class="explore-section-header">
+                                <h2 class="explore-section-title">آلبوم‌ها</h2>
+                            </div>
+                            <div class="explore-items-container" id="tiarinAlbumsContainer">
+                                <div class="explore-items-scroll">
+                                    <div class="explore-items-list" id="tiarinAlbumsList">
                                         <div class="explore-loading">
                                             <div class="spinner spinner-small"></div>
                                         </div>

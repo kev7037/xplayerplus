@@ -506,6 +506,34 @@ body {
     min-width: 64px;
 }
 
+.explore-source-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding: 0 16px;
+}
+.explore-source-tab {
+    flex: 1;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 500px;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+.explore-source-tab:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+.explore-source-tab.active,
+.explore-source-tab[aria-selected="true"] {
+    background: var(--spotify-green);
+    color: #000;
+    border-color: var(--spotify-green);
+}
+
 .search-box-wrapper {
     margin-bottom: 28px;
     position: relative;

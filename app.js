@@ -76,6 +76,17 @@ class MusicPlayer {
         this.latestTracksList = document.getElementById('latestTracksList');
         this.topMonthlyList = document.getElementById('topMonthlyList');
         this.podcastsList = document.getElementById('podcastsList');
+        // Melovaz containers
+        // this.melovazLatestList = document.getElementById('melovazLatestList'); // Removed: latest list removed from UI
+        this.melovazAlbumsList = document.getElementById('melovazAlbumsList');
+        this.melovazSinglesList = document.getElementById('melovazSinglesList');
+        this.melovazPlaylistsList = document.getElementById('melovazPlaylistsList');
+        // Tiarin containers
+        this.tiarinLatestList = document.getElementById('tiarinLatestList');
+        this.tiarinTopList = document.getElementById('tiarinTopList');
+        this.tiarinSinglesList = document.getElementById('tiarinSinglesList');
+        this.tiarinPlaylistsList = document.getElementById('tiarinPlaylistsList');
+        this.tiarinAlbumsList = document.getElementById('tiarinAlbumsList');
         this.exploreDetailContainer = document.getElementById('exploreDetailContainer');
         this.exploreDetailTitle = document.getElementById('exploreDetailTitle');
         this.exploreDetailInfiniteLoader = document.getElementById('exploreDetailInfiniteLoader');
@@ -92,6 +103,7 @@ class MusicPlayer {
 
         this.currentExploreType = null;
         this.currentExplorePage = 1;
+        this.currentExploreSource = 'tehran'; // 'tehran' | 'melovaz' | 'tiarin'
         this.exploreHasMore = false;
         this.exploreLoading = false;
         this.exploreCache = {};
@@ -99,6 +111,13 @@ class MusicPlayer {
         this.isDirectoryPlaylist = false; // Flag to indicate if exploreDetail shows a directory playlist
         this.exploreDetailTracks = []; // Tracks currently shown on explore detail (برترین‌ها، آهنگ‌های جدید، پادکست)
         this.loadExploreCache();
+        
+        // Initialize explore sections visibility
+        setTimeout(() => {
+            if (document.getElementById('explorePage')) {
+                this.updateExploreSectionsVisibility();
+            }
+        }, 100);
         
         // Search
         this.searchInput = document.getElementById('searchInputMain');
@@ -378,6 +397,20 @@ class MusicPlayer {
                 });
                 this.searchResults = [];
                 this.displaySearchResultsMain(this.searchResults, true);
+            });
+        });
+
+        document.querySelectorAll('.explore-source-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                const source = tab.dataset.source;
+                if (source !== 'tehran' && source !== 'melovaz' && source !== 'tiarin') return;
+                this.currentExploreSource = source;
+                document.querySelectorAll('.explore-source-tab').forEach(t => {
+                    t.classList.toggle('active', t.dataset.source === source);
+                    t.setAttribute('aria-selected', t.dataset.source === source ? 'true' : 'false');
+                });
+                this.updateExploreSectionsVisibility();
+                this.loadExploreData();
             });
         });
 
@@ -1044,6 +1077,287 @@ class MusicPlayer {
         return this.parseSearchResultsMelovaz(htmlContent, query, page);
     }
 
+    // Helper function to extract image from element (works for both Melovaz and Tiarin)
+    extractImageFromElement(element, baseUrl) {
+        if (!element) return '';
+        
+        let img = null;
+        let image = '';
+        
+        // Strategy 1: Find figure.TSale-img > img (most specific for both sites)
+        // Structure: article.postbox-i > div.post-img-hover > a > figure.TSale-img > img
+        const figureTSale = element.querySelector('figure.TSale-img');
+        if (figureTSale) {
+            img = figureTSale.querySelector('img');
+            if (img) {
+                // Try data-lazy-src first (for lazy-loaded images), then src
+                image = img.getAttribute('data-lazy-src') || 
+                       img.getAttribute('src') || 
+                       img.src || 
+                       img.getAttribute('data-src') || 
+                       img.getAttribute('data-original') || 
+                       img.getAttribute('data-image') || '';
+            }
+        }
+        
+        // Strategy 1b: Also check in .post-img-hover > figure.TSale-img > img
+        if (!image && !img) {
+            const postImgHover = element.querySelector('.post-img-hover');
+            if (postImgHover) {
+                const figureTSaleInHover = postImgHover.querySelector('figure.TSale-img');
+                if (figureTSaleInHover) {
+                    img = figureTSaleInHover.querySelector('img');
+                    if (img) {
+                        image = img.getAttribute('data-lazy-src') || 
+                               img.getAttribute('src') || 
+                               img.src || 
+                               img.getAttribute('data-src') || 
+                               img.getAttribute('data-original') || 
+                               img.getAttribute('data-image') || '';
+                    }
+                }
+            }
+        }
+        
+        // Strategy 2: Direct .TSale-img img
+        if (!image && !img) {
+            const tsaleImg = element.querySelector('.TSale-img img');
+            if (tsaleImg) {
+                img = tsaleImg;
+                image = img.getAttribute('data-lazy-src') || 
+                       img.getAttribute('src') || 
+                       img.src || 
+                       img.getAttribute('data-src') || 
+                       img.getAttribute('data-original') || 
+                       img.getAttribute('data-image') || '';
+            }
+        }
+        
+        // Strategy 3: Any img in element (fallback)
+        if (!image && !img) {
+            img = element.querySelector('img');
+            if (img) {
+                image = img.getAttribute('data-lazy-src') || 
+                       img.getAttribute('src') || 
+                       img.src || 
+                       img.getAttribute('data-src') || 
+                       img.getAttribute('data-original') || 
+                       img.getAttribute('data-image') || '';
+            }
+        }
+        
+        // Strategy 4: Common image selectors
+        if (!image && !img) {
+            img = element.querySelector('.post-img-hover img, .post-img img, .img img, [class*="img"] img, [class*="image"] img, .thumbnail img, .cover img, .box-i img');
+            if (img) {
+                image = img.getAttribute('data-lazy-src') || 
+                       img.getAttribute('src') || 
+                       img.src || 
+                       img.getAttribute('data-src') || 
+                       img.getAttribute('data-original') || 
+                       img.getAttribute('data-image') || '';
+            }
+        }
+        
+        // Strategy 5: Search in parent containers using closest
+        if (!image && !img && element.closest) {
+            const parent = element.closest('article, .post, .item, [class*="post"], [class*="item"], .box-i, .postbox-i, [class*="box"]');
+            if (parent && parent !== element) {
+                const parentFigureTSale = parent.querySelector('figure.TSale-img');
+                if (parentFigureTSale) {
+                    img = parentFigureTSale.querySelector('img');
+                    if (img) {
+                        image = img.getAttribute('data-lazy-src') || 
+                               img.getAttribute('src') || 
+                               img.src || 
+                               img.getAttribute('data-src') || 
+                               img.getAttribute('data-original') || 
+                               img.getAttribute('data-image') || '';
+                    }
+                }
+                if (!image && !img) {
+                    const parentPostImgHover = parent.querySelector('.post-img-hover');
+                    if (parentPostImgHover) {
+                        const parentHoverFigure = parentPostImgHover.querySelector('figure.TSale-img');
+                        if (parentHoverFigure) {
+                            img = parentHoverFigure.querySelector('img');
+                            if (img) {
+                                image = img.getAttribute('data-lazy-src') || 
+                                       img.getAttribute('src') || 
+                                       img.src || 
+                                       img.getAttribute('data-src') || 
+                                       img.getAttribute('data-original') || 
+                                       img.getAttribute('data-image') || '';
+                            }
+                        }
+                    }
+                }
+                if (!image && !img) {
+                    img = parent.querySelector('.TSale-img img, img');
+                    if (img) {
+                        image = img.getAttribute('data-lazy-src') || 
+                               img.getAttribute('src') || 
+                               img.src || 
+                               img.getAttribute('data-src') || 
+                               img.getAttribute('data-original') || 
+                               img.getAttribute('data-image') || '';
+                    }
+                }
+            }
+        }
+        
+        // Strategy 6: Search in parentElement
+        if (!image && !img && element.parentElement) {
+            const parentFigureTSale = element.parentElement.querySelector('figure.TSale-img');
+            if (parentFigureTSale) {
+                img = parentFigureTSale.querySelector('img');
+                if (img) {
+                    image = img.getAttribute('data-lazy-src') || 
+                           img.getAttribute('src') || 
+                           img.src || 
+                           img.getAttribute('data-src') || 
+                           img.getAttribute('data-original') || 
+                           img.getAttribute('data-image') || '';
+                }
+            }
+            if (!image && !img) {
+                const parentPostImgHover = element.parentElement.querySelector('.post-img-hover');
+                if (parentPostImgHover) {
+                    const parentHoverFigure = parentPostImgHover.querySelector('figure.TSale-img');
+                    if (parentHoverFigure) {
+                        img = parentHoverFigure.querySelector('img');
+                        if (img) {
+                            image = img.getAttribute('data-lazy-src') || 
+                                   img.getAttribute('src') || 
+                                   img.src || 
+                                   img.getAttribute('data-src') || 
+                                   img.getAttribute('data-original') || 
+                                   img.getAttribute('data-image') || '';
+                        }
+                    }
+                }
+            }
+            if (!image && !img) {
+                img = element.parentElement.querySelector('.TSale-img img, img');
+                if (img) {
+                    image = img.getAttribute('data-lazy-src') || 
+                           img.getAttribute('src') || 
+                           img.src || 
+                           img.getAttribute('data-src') || 
+                           img.getAttribute('data-original') || 
+                           img.getAttribute('data-image') || '';
+                }
+            }
+        }
+        
+        // Strategy 7: Search in grandparent
+        if (!image && !img && element.parentElement && element.parentElement.parentElement) {
+            const grandParent = element.parentElement.parentElement;
+            const grandParentFigureTSale = grandParent.querySelector('figure.TSale-img');
+            if (grandParentFigureTSale) {
+                img = grandParentFigureTSale.querySelector('img');
+                if (img) {
+                    image = img.getAttribute('data-lazy-src') || 
+                           img.getAttribute('src') || 
+                           img.src || 
+                           img.getAttribute('data-src') || 
+                           img.getAttribute('data-lazy-src') || 
+                           img.getAttribute('data-original') || 
+                           img.getAttribute('data-image') || '';
+                }
+            }
+            if (!image && !img) {
+                const grandParentPostImgHover = grandParent.querySelector('.post-img-hover');
+                if (grandParentPostImgHover) {
+                    const grandParentHoverFigure = grandParentPostImgHover.querySelector('figure.TSale-img');
+                    if (grandParentHoverFigure) {
+                        img = grandParentHoverFigure.querySelector('img');
+                        if (img) {
+                            image = img.getAttribute('data-lazy-src') || 
+                                   img.getAttribute('src') || 
+                                   img.src || 
+                                   img.getAttribute('data-src') || 
+                                   img.getAttribute('data-original') || 
+                                   img.getAttribute('data-image') || '';
+                        }
+                    }
+                }
+            }
+            if (!image && !img) {
+                img = grandParent.querySelector('.TSale-img img, img');
+                if (img) {
+                    image = img.getAttribute('data-lazy-src') || 
+                           img.getAttribute('src') || 
+                           img.src || 
+                           img.getAttribute('data-src') || 
+                           img.getAttribute('data-original') || 
+                           img.getAttribute('data-image') || '';
+                }
+            }
+        }
+        
+        // Check background-image style if we found img but no src
+        if (img && !image && img.style && img.style.backgroundImage) {
+            const bgMatch = img.style.backgroundImage.match(/url\(['"]?([^'"]+)['"]?\)/);
+            if (bgMatch) image = bgMatch[1];
+        }
+        
+        // Strategy 8: Search in siblings
+        if (!image && !img && element.nextElementSibling) {
+            const siblingFigure = element.nextElementSibling.querySelector('figure.TSale-img');
+            if (siblingFigure) {
+                img = siblingFigure.querySelector('img');
+                if (img) {
+                    image = img.getAttribute('data-lazy-src') || 
+                           img.getAttribute('src') || 
+                           img.src || 
+                           img.getAttribute('data-src') || '';
+                }
+            }
+        }
+        if (!image && !img && element.previousElementSibling) {
+            const siblingFigure = element.previousElementSibling.querySelector('figure.TSale-img');
+            if (siblingFigure) {
+                img = siblingFigure.querySelector('img');
+                if (img) {
+                    image = img.getAttribute('data-lazy-src') || 
+                           img.getAttribute('src') || 
+                           img.src || 
+                           img.getAttribute('data-src') || '';
+                }
+            }
+        }
+        
+        // Strategy 9: Last resort - search for ANY figure.TSale-img in the entire element tree
+        if (!image && !img) {
+            const allFigures = element.querySelectorAll('figure.TSale-img');
+            if (allFigures.length > 0) {
+                const firstFigure = allFigures[0];
+                img = firstFigure.querySelector('img');
+                if (img) {
+                    image = img.getAttribute('data-lazy-src') || 
+                           img.getAttribute('src') || 
+                           img.src || 
+                           img.getAttribute('data-src') || 
+                           img.getAttribute('data-original') || 
+                           img.getAttribute('data-image') || '';
+                }
+            }
+        }
+        
+        // Normalize URL
+        if (image) {
+            image = image.trim();
+            if (image.startsWith('//')) {
+                image = 'https:' + image;
+            } else if (!image.startsWith('http') && !image.startsWith('data:')) {
+                image = image.startsWith('/') ? baseUrl + image : baseUrl + '/' + image;
+            }
+        }
+        
+        return image || '';
+    }
+
     parseSearchResultsMelovaz(html, query, page = 1) {
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
@@ -1081,8 +1395,9 @@ class MusicPlayer {
         const genericTitlePattern = /^(تک\s*آهنگ|آلبوم|پلی\s*لیست|single|album|playlist)$/i;
         const isGenericTitle = (t) => !t || genericTitlePattern.test(t.trim());
 
-        // ساختار ملواز: article.postbox-i > post-img-hover > a, و section.postinfo > ul > li.index-al (عنوان), li.index-ar (خواننده)
-        const articles = doc.querySelectorAll('article.postbox-i, .postbox-i, section.box-i article, section.box-i .postbox-i');
+        // ساختار ملواز: section.posting > article.postbox-i > div.post-img-hover > a > figure.TSale-img > img
+        // عکس‌ها در figure.TSale-img > img هستند با src یا data-lazy-src
+        const articles = doc.querySelectorAll('article.postbox-i, .postbox-i, section.posting article.postbox-i, section.box-i article, section.box-i .postbox-i, article[class*="post"], article');
         const seenUrls = new Set();
         (articles.length ? articles : doc.querySelectorAll('article')).forEach((articleEl, index) => {
             const container = articleEl;
@@ -1109,25 +1424,159 @@ class MusicPlayer {
 
             const tsaleEl = container.querySelector('span.TSale');
             const tsaleText = tsaleEl ? (tsaleEl.textContent || '').trim() : '';
-            const isAlbumOrPlaylist = /آلبوم|پلی\s*لیست|album|playlist/i.test(tsaleText);
-            const isAlbum = /آلبوم|album/i.test(tsaleText);
+            
+            // Simple and reliable detection: Check multiple indicators
+            // If ANY indicator suggests album/playlist, treat it as such
+            let isAlbumOrPlaylist = false;
+            
+            // 1. Check TSale text (most reliable for Melovaz)
+            if (tsaleText && /آلبوم|پلی\s*لیست|album|playlist/i.test(tsaleText)) {
+                isAlbumOrPlaylist = true;
+            }
+            
+            // 2. Check title for "Album" keyword (e.g., "1 Billion Views - The 1st Album")
+            if (!isAlbumOrPlaylist) {
+                const titleLower = title.toLowerCase();
+                if (/\b(album|playlist|آلبوم|پلی\s*لیست)\b/i.test(titleLower)) {
+                    isAlbumOrPlaylist = true;
+                }
+            }
+            
+            // 3. Check track count (> 1 track = album/playlist)
+            if (!isAlbumOrPlaylist) {
+                const indexDaList = container.querySelectorAll('li.index-da');
+                if (indexDaList.length > 0) {
+                    const lastIndexDa = indexDaList[indexDaList.length - 1];
+                    if (lastIndexDa) {
+                        const daText = (lastIndexDa.textContent || '').trim();
+                        const trackMatch = daText.match(/(\d+)\s*(ترک|track)/i);
+                        if (trackMatch) {
+                            const trackCount = parseInt(trackMatch[1], 10) || 0;
+                            if (trackCount > 1) {
+                                isAlbumOrPlaylist = true;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // 4. Check URL structure
+            if (!isAlbumOrPlaylist) {
+                const urlPath = fullUrl.split('?')[0].split('#')[0].toLowerCase();
+                if (urlPath.includes('/tag/album') || 
+                    urlPath.includes('/tag/playlist') ||
+                    urlPath.includes('/tag/%d8%a2%d9%84%d8%a8%d9%88%d9%85') ||
+                    urlPath.includes('/tag/%d9%be%d9%84%db%8c') ||
+                    urlPath.includes('/album/') ||
+                    urlPath.includes('/playlist/') ||
+                    urlPath.match(/\/(album|playlist|tag)\/[^\/]+/i)) {
+                    isAlbumOrPlaylist = true;
+                }
+            }
+            
+            // 5. Final fallback: ALWAYS check title for "Album" keyword
+            // This is CRITICAL for "latest" list where items might have homepage URLs
+            // We check title regardless of URL because title is the most reliable indicator
+            if (!isAlbumOrPlaylist) {
+                const titleLower = title.toLowerCase();
+                // If title contains "Album" or "Playlist", it's definitely an album/playlist
+                // This works even if URL is homepage or doesn't have album/playlist indicators
+                if (/\b(album|playlist|آلبوم|پلی\s*لیست)\b/i.test(titleLower)) {
+                    isAlbumOrPlaylist = true;
+                    console.log('[Melovaz Parse] ✅ Final fallback: Detected album/playlist from title:', title);
+                }
+            }
+            
+            // Debug log for detection
+            if (isAlbumOrPlaylist) {
+                console.log('[Melovaz Parse] ✅ Detected album/playlist:', {
+                    title: title,
+                    url: fullUrl,
+                    tsaleText: tsaleText,
+                    isAlbumOrPlaylist: isAlbumOrPlaylist
+                });
+            } else {
+                // Also log when NOT detected to help debug
+                console.log('[Melovaz Parse] ❌ NOT detected as album/playlist:', {
+                    title: title,
+                    url: fullUrl,
+                    tsaleText: tsaleText
+                });
+            }
+            // Use isAlbumOrPlaylist for display title logic (more reliable)
+            const isAlbum = isAlbumOrPlaylist || /آلبوم|album/i.test(tsaleText) || fullUrl.toLowerCase().includes('/tag/album') || fullUrl.toLowerCase().includes('/album/');
             let displayTitle = title.slice(0, 200);
             if (isAlbum && displayTitle && !displayTitle.startsWith('آلبوم:')) displayTitle = 'آلبوم: ' + displayTitle;
 
-            const img = container.querySelector('img');
-            let image = img ? (img.src || img.getAttribute('src') || '') : '';
-            if (image && !image.startsWith('http')) image = image.startsWith('/') ? baseUrl + image : baseUrl + '/' + image;
+            // Extract image using helper function
+            // container = article.postbox-i, should contain: div.post-img-hover > a > figure.TSale-img > img
+            let image = this.extractImageFromElement(container, baseUrl);
+            
+            // Debug: if no image found, log and try direct approach
+            if (!image) {
+                // Direct approach: find post-img-hover > figure.TSale-img > img
+                const postImgHover = container.querySelector('.post-img-hover');
+                if (postImgHover) {
+                    const figureTSale = postImgHover.querySelector('figure.TSale-img');
+                    if (figureTSale) {
+                        const img = figureTSale.querySelector('img');
+                        if (img) {
+                            image = img.getAttribute('data-lazy-src') || 
+                                   img.getAttribute('src') || 
+                                   img.src || '';
+                        }
+                    }
+                }
+            }
+            
+            // Debug: if still no image found, try to find figure.TSale-img in the entire article
+            if (!image) {
+                // Try to find figure.TSale-img anywhere in the article structure
+                const allFigures = container.querySelectorAll('figure.TSale-img');
+                if (allFigures.length > 0) {
+                    const firstFigure = allFigures[0];
+                    const firstImg = firstFigure.querySelector('img');
+                    if (firstImg) {
+                        image = firstImg.getAttribute('src') || firstImg.src || firstImg.getAttribute('data-src') || firstImg.getAttribute('data-lazy-src') || '';
+                        if (image) {
+                            image = image.trim();
+                            if (image.startsWith('//')) {
+                                image = 'https:' + image;
+                            } else if (!image.startsWith('http') && !image.startsWith('data:')) {
+                                image = image.startsWith('/') ? baseUrl + image : baseUrl + '/' + image;
+                            }
+                        }
+                    }
+                }
+            }
 
-            results.push({
+            // IMPORTANT: Store original title (not displayTitle) so fallback detection in click handler works correctly
+            // displayTitle might have "آلبوم: " prefix which could interfere with title-based detection
+            // But we need to remove "آلبوم: " prefix if it exists in the original title for detection
+            const originalTitle = title.slice(0, 200);
+            const result = {
                 id: 'melovaz-' + (page - 1) * 100 + index,
-                title: displayTitle,
+                title: originalTitle, // Use original title for detection, displayTitle is only for UI
+                displayTitle: displayTitle, // Store displayTitle separately if needed
                 artist: artist,
                 url: fullUrl,
                 pageUrl: fullUrl,
                 image: image || '',
                 source: 'melovaz',
                 isAlbumOrPlaylist: isAlbumOrPlaylist
-            });
+            };
+            
+            // Debug log for albums/playlists
+            if (isAlbumOrPlaylist) {
+                console.log('[Melovaz] Detected album/playlist:', {
+                    title: displayTitle,
+                    url: fullUrl,
+                    tsaleText: tsaleText,
+                    isAlbumOrPlaylist: isAlbumOrPlaylist
+                });
+            }
+            
+            results.push(result);
         });
 
         if (results.length === 0) {
@@ -1149,11 +1598,33 @@ class MusicPlayer {
                 if ((!title || title === 'پلی لیست' || title === 'آلبوم') && titleNode) title = (titleNode.textContent || '').trim().replace(/\s+/g, ' ');
                 if (!title) title = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80);
                 if (!title || title.length < 2 || isBlockedTitle(title)) return;
-                const img = el.querySelector('img');
-                let image = img ? (img.src || img.getAttribute('src') || '') : '';
-                if (image && !image.startsWith('http')) image = image.startsWith('/') ? baseUrl + image : baseUrl + '/' + image;
+                // Extract image using helper function
+                const image = this.extractImageFromElement(el, baseUrl);
                 const artistEl = el.querySelector('.artist a, .byline a, [rel="author"], .entry-meta a');
                 const artist = artistEl ? (artistEl.textContent || '').trim() : 'ملواز';
+                
+                // Detect album/playlist from URL and HTML structure
+                let isAlbumOrPlaylist = false;
+                // 1. Check title first
+                const titleLower = title.toLowerCase();
+                isAlbumOrPlaylist = /\b(album|playlist|آلبوم|پلی\s*لیست)\b/i.test(titleLower);
+                // 2. Check URL
+                if (!isAlbumOrPlaylist) {
+                    const urlLower = fullUrl.toLowerCase();
+                    isAlbumOrPlaylist = urlLower.includes('/tag/album') || 
+                                       urlLower.includes('/tag/playlist') ||
+                                       urlLower.includes('/tag/%d8%a2%d9%84%d8%a8%d9%88%d9%85') ||
+                                       urlLower.includes('/tag/%d9%be%d9%84%db%8c') ||
+                                       urlLower.includes('/album/') ||
+                                       urlLower.includes('/playlist/');
+                }
+                // 3. Check TSale if available
+                if (!isAlbumOrPlaylist) {
+                    const tsaleEl = el.querySelector('span.TSale');
+                    const tsaleText = tsaleEl ? (tsaleEl.textContent || '').trim() : '';
+                    isAlbumOrPlaylist = /آلبوم|پلی\s*لیست|album|playlist/i.test(tsaleText);
+                }
+                
                 results.push({
                     id: 'melovaz-f-' + index + '-' + (page - 1) * 500,
                     title: title.slice(0, 200),
@@ -1162,7 +1633,7 @@ class MusicPlayer {
                     pageUrl: fullUrl,
                     image: image || '',
                     source: 'melovaz',
-                    isAlbumOrPlaylist: true
+                    isAlbumOrPlaylist: isAlbumOrPlaylist
                 });
             });
         }
@@ -1185,13 +1656,48 @@ class MusicPlayer {
                 }
                 if (!title || title.length < 2) title = 'نتیجه ' + (results.length + 1);
                 if (isBlockedTitle(title)) return;
+                // Try multiple selectors to find image - Melovaz uses figure.TSale-img > img
+                let img = parent ? parent.querySelector('figure.TSale-img img, .TSale-img img') : null;
+                if (!img && parent) {
+                    img = parent.querySelector('img');
+                }
+                if (!img && parent) {
+                    img = parent.querySelector('.post-img-hover img, .post-img img, .img img, [class*="img"] img, [class*="image"] img, .thumbnail img, .cover img');
+                }
+                if (!img && parent && parent.closest) {
+                    const grandParent = parent.closest('article, .post, .item, [class*="post"], [class*="item"]');
+                    if (grandParent) {
+                        img = grandParent.querySelector('figure.TSale-img img, .TSale-img img, img');
+                    }
+                }
+                let image = '';
+                if (img) {
+                    image = img.src || img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || img.getAttribute('data-original') || img.getAttribute('data-image') || '';
+                    if (!image && img.style && img.style.backgroundImage) {
+                        const bgMatch = img.style.backgroundImage.match(/url\(['"]?([^'"]+)['"]?\)/);
+                        if (bgMatch) image = bgMatch[1];
+                    }
+                }
+                if (!image && parent && parent.parentElement) {
+                    const parentImg = parent.parentElement.querySelector('figure.TSale-img img, .TSale-img img, img');
+                    if (parentImg) {
+                        image = parentImg.src || parentImg.getAttribute('src') || parentImg.getAttribute('data-src') || '';
+                    }
+                }
+                if (image) {
+                    if (image.startsWith('//')) {
+                        image = 'https:' + image;
+                    } else if (!image.startsWith('http')) {
+                        image = image.startsWith('/') ? baseUrl + image : baseUrl + '/' + image;
+                    }
+                }
                 results.push({
                     id: 'melovaz-f-' + i + '-' + (page - 1) * 500,
                     title: title.slice(0, 200),
                     artist: 'ملواز',
                     url: fullUrl,
                     pageUrl: fullUrl,
-                    image: '',
+                    image: image || '',
                     source: 'melovaz',
                     isAlbumOrPlaylist: true
                 });
@@ -1311,13 +1817,123 @@ class MusicPlayer {
                 const match = daText.match(/(\d+)\s*Tracks?/i) || daText.match(/(\d+)\s*ترک/i);
                 if (match) trackCount = parseInt(match[1], 10) || 0;
             }
-            const isAlbumOrPlaylist = trackCount > 1;
+            // Simple and reliable detection: Check multiple indicators
+            // If ANY indicator suggests album/playlist, treat it as such
+            let isAlbumOrPlaylist = false;
+            
+            // 1. Check track count first (most reliable for Tiarin)
+            if (trackCount > 1) {
+                isAlbumOrPlaylist = true;
+            }
+            
+            // 2. Check URL structure
+            if (!isAlbumOrPlaylist) {
+                const urlPath = fullUrl.split('?')[0].split('#')[0].toLowerCase();
+                if (urlPath.includes('/album/') || 
+                    urlPath.includes('/playlist/') ||
+                    urlPath.includes('/hashtag/') ||
+                    urlPath.match(/^\/(album|playlist)\/\d+/)) {
+                    isAlbumOrPlaylist = true;
+                }
+            }
+            
+            // 3. Check title for album/playlist keywords
+            if (!isAlbumOrPlaylist) {
+                const titleLower = title.toLowerCase();
+                if (/\b(album|playlist|آلبوم|پلی\s*لیست)\b/i.test(titleLower)) {
+                    isAlbumOrPlaylist = true;
+                }
+            }
+            
+            // 4. Final fallback: ALWAYS check title for "Album" keyword
+            // This is CRITICAL for "latest" list where items might have homepage URLs
+            // We check title regardless of URL because title is the most reliable indicator
+            if (!isAlbumOrPlaylist) {
+                const titleLower = title.toLowerCase();
+                // If title contains "Album" or "Playlist", it's definitely an album/playlist
+                // This works even if URL is homepage or doesn't have album/playlist indicators
+                if (/\b(album|playlist|آلبوم|پلی\s*لیست)\b/i.test(titleLower)) {
+                    isAlbumOrPlaylist = true;
+                    console.log('[Tiarin Parse] ✅ Final fallback: Detected album/playlist from title:', title);
+                }
+            }
+            
+            // Debug log for detection
+            if (isAlbumOrPlaylist) {
+                console.log('[Tiarin Parse] ✅ Detected album/playlist:', {
+                    title: title,
+                    url: fullUrl,
+                    trackCount: trackCount,
+                    isAlbumOrPlaylist: isAlbumOrPlaylist
+                });
+            } else {
+                // Also log when NOT detected to help debug
+                console.log('[Tiarin Parse] ❌ NOT detected as album/playlist:', {
+                    title: title,
+                    url: fullUrl,
+                    trackCount: trackCount
+                });
+            }
 
-            const img = box.querySelector('img');
-            let image = img ? (img.src || img.getAttribute('src') || '') : '';
-            if (image && !image.startsWith('http')) image = image.startsWith('/') ? baseUrl + image : baseUrl + '/' + image;
+            // Extract image using helper function - try box first, then postinfo
+            // box = article.postbox-i (parent of section.postinfo), should contain: div.post-img-hover > a > span[itemprop="image"] > figure.TSale-img > img
+            let image = this.extractImageFromElement(box, baseUrl);
+            if (!image && postinfo) {
+                image = this.extractImageFromElement(postinfo, baseUrl);
+            }
+            
+            // Debug: if no image found, try direct approach
+            if (!image) {
+                // Direct approach: find post-img-hover > figure.TSale-img > img
+                const postImgHover = box.querySelector('.post-img-hover');
+                if (postImgHover) {
+                    // For Tiarin, might be wrapped in span[itemprop="image"]
+                    const figureTSale = postImgHover.querySelector('span[itemprop="image"] figure.TSale-img, figure.TSale-img');
+                    if (figureTSale) {
+                        const img = figureTSale.querySelector('img');
+                        if (img) {
+                            image = img.getAttribute('data-lazy-src') || 
+                                   img.getAttribute('src') || 
+                                   img.src || '';
+                            // Normalize URL
+                            if (image) {
+                                image = image.trim();
+                                if (image.startsWith('//')) {
+                                    image = 'https:' + image;
+                                } else if (!image.startsWith('http') && !image.startsWith('data:')) {
+                                    image = image.startsWith('/') ? baseUrl + image : baseUrl + '/' + image;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Debug: if still no image found, try to find figure.TSale-img in the entire box structure
+            if (!image) {
+                // Try to find figure.TSale-img anywhere in the box
+                const allFigures = box.querySelectorAll('figure.TSale-img');
+                if (allFigures.length > 0) {
+                    const firstFigure = allFigures[0];
+                    const firstImg = firstFigure.querySelector('img');
+                    if (firstImg) {
+                        image = firstImg.getAttribute('data-lazy-src') || 
+                               firstImg.getAttribute('src') || 
+                               firstImg.src || '';
+                        // Normalize URL
+                        if (image) {
+                            image = image.trim();
+                            if (image.startsWith('//')) {
+                                image = 'https:' + image;
+                            } else if (!image.startsWith('http') && !image.startsWith('data:')) {
+                                image = image.startsWith('/') ? baseUrl + image : baseUrl + '/' + image;
+                            }
+                        }
+                    }
+                }
+            }
 
-            results.push({
+            const result = {
                 id: 'tiarin-' + (page - 1) * 100 + index,
                 title: title.slice(0, 200),
                 artist: artist,
@@ -1326,7 +1942,19 @@ class MusicPlayer {
                 image: image || '',
                 source: 'tiarin',
                 isAlbumOrPlaylist: isAlbumOrPlaylist
-            });
+            };
+            
+            // Debug log for albums/playlists
+            if (isAlbumOrPlaylist) {
+                console.log('[Tiarin] Detected album/playlist:', {
+                    title: title.slice(0, 200),
+                    url: fullUrl,
+                    trackCount: trackCount,
+                    isAlbumOrPlaylist: isAlbumOrPlaylist
+                });
+            }
+            
+            results.push(result);
         });
 
         // اگر با section.postinfo چیزی نیامد، fallback: همه لینک‌های آلبوم/تک/پلی‌لیست و باکس از طریق .box-i
@@ -1360,10 +1988,33 @@ class MusicPlayer {
                         if (match) trackCount = parseInt(match[1], 10) || 0;
                     }
                 }
-                const isAlbumOrPlaylist = trackCount > 1;
-                const img = box.querySelector('img');
-                let image = img ? (img.src || img.getAttribute('src') || '') : '';
-                if (image && !image.startsWith('http')) image = image.startsWith('/') ? baseUrl + image : baseUrl + '/' + image;
+                // Check multiple ways to detect album/playlist:
+                // 1. From track count (> 1 track)
+                let isAlbumOrPlaylist = trackCount > 1;
+                // 2. From URL (check if URL contains album or playlist indicators)
+                if (!isAlbumOrPlaylist) {
+                    const urlLower = fullUrl.toLowerCase();
+                    isAlbumOrPlaylist = urlLower.includes('/album/') || 
+                                       urlLower.includes('/playlist/') ||
+                                       urlLower.includes('/hashtag/');
+                }
+                // 3. Check if URL path suggests it's an album/playlist (not a single track)
+                if (!isAlbumOrPlaylist && fullUrl) {
+                    try {
+                        const urlPath = new URL(fullUrl).pathname.toLowerCase();
+                        // If URL has numeric ID pattern like /album/12345 or /playlist/12345, it's likely an album/playlist
+                        if (urlPath.match(/^\/(album|playlist)\/\d+/)) {
+                            isAlbumOrPlaylist = true;
+                        }
+                    } catch (e) {
+                        // Ignore URL parsing errors
+                    }
+                }
+                // Extract image using helper function - try box first, then postinfo
+                let image = this.extractImageFromElement(box, baseUrl);
+                if (!image && postinfo) {
+                    image = this.extractImageFromElement(postinfo, baseUrl);
+                }
 
                 results.push({
                     id: 'tiarin-f-' + index + '-' + (page - 1) * 500,
@@ -1414,9 +2065,11 @@ class MusicPlayer {
                     }
                 }
                 const isAlbumOrPlaylist = trackCount > 1;
-                const img = parent ? parent.querySelector('img') : null;
-                let image = img ? (img.src || img.getAttribute('src') || '') : '';
-                if (image && !image.startsWith('http')) image = image.startsWith('/') ? baseUrl + image : baseUrl + '/' + image;
+                // Extract image using helper function - try parent first, then postinfo
+                let image = parent ? this.extractImageFromElement(parent, baseUrl) : '';
+                if (!image && postinfo) {
+                    image = this.extractImageFromElement(postinfo, baseUrl);
+                }
 
                 results.push({
                     id: 'tiarin-link-' + index + '-' + (page - 1) * 500,
@@ -2289,11 +2942,28 @@ class MusicPlayer {
     isTrackCurrentlyPlaying(track) {
         const current = this.getCurrentTrack();
         if (!current) return false;
-        if (String(current.id) === String(track.id)) return true;
-        const curUrl = (current.url || current.pageUrl || '').trim();
-        const trUrl = (track.url || track.pageUrl || '').trim();
-        if (curUrl && trUrl && this.normalizeUrl(curUrl) === this.normalizeUrl(trUrl)) return true;
-        return false;
+        
+        // ONLY use URL for comparison - it's the most reliable and unique identifier
+        // Never use ID because IDs can be duplicate across different lists
+        // Check both url and pageUrl for both current and track
+        const curUrl = (current.url || '').trim();
+        const curPageUrl = (current.pageUrl || '').trim();
+        const trUrl = (track.url || '').trim();
+        const trPageUrl = (track.pageUrl || '').trim();
+        
+        // Normalize all URLs
+        const curUrlNorm = curUrl ? this.normalizeUrl(curUrl) : '';
+        const curPageUrlNorm = curPageUrl ? this.normalizeUrl(curPageUrl) : '';
+        const trUrlNorm = trUrl ? this.normalizeUrl(trUrl) : '';
+        const trPageUrlNorm = trPageUrl ? this.normalizeUrl(trPageUrl) : '';
+        
+        // Compare: check if any of current URLs match any of track URLs
+        const isMatch = (curUrlNorm && trUrlNorm && curUrlNorm === trUrlNorm) ||
+                       (curUrlNorm && trPageUrlNorm && curUrlNorm === trPageUrlNorm) ||
+                       (curPageUrlNorm && trUrlNorm && curPageUrlNorm === trUrlNorm) ||
+                       (curPageUrlNorm && trPageUrlNorm && curPageUrlNorm === trPageUrlNorm);
+        
+        return !!isMatch;
     }
 
     createTrackElement(track, source = 'playlist', index = null) {
@@ -2308,7 +2978,17 @@ class MusicPlayer {
         div.dataset.trackId = track.id;
         const trackUrlKey = (track.url || track.pageUrl || '').trim();
         if (trackUrlKey) {
-            div.dataset.trackUrl = this.normalizeUrl(trackUrlKey);
+            const normalizedUrl = this.normalizeUrl(trackUrlKey);
+            div.dataset.trackUrl = normalizedUrl;
+            // Debug log for troubleshooting
+            if (track.source === 'melovaz' || track.source === 'tiarin') {
+                console.log('[createTrackElement] Setting trackUrl:', {
+                    title: track.title,
+                    source: track.source,
+                    originalUrl: trackUrlKey,
+                    normalizedUrl: normalizedUrl
+                });
+            }
         }
 
         // در همه صفحات (جستجو، پلی‌لیست، اکسپلور، خانه): اگر این ترک الان در حال پخش است، حالت انتخاب‌شده
@@ -2318,7 +2998,8 @@ class MusicPlayer {
         }
 
         // Ensure track has required properties
-        const trackTitle = track.title || 'بدون عنوان';
+        // Use displayTitle if available (for Melovaz albums), otherwise use title
+        const trackTitle = (track.displayTitle || track.title || 'بدون عنوان');
         const trackArtist = track.artist || 'ناشناس';
         const trackImage = track.image || 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23b3b3b3"%3E%3Cpath d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/%3E%3C/svg%3E';
         
@@ -2474,6 +3155,16 @@ class MusicPlayer {
                             }
                         }
                     } else if (source === 'explore') {
+                        // Check if track is an album or playlist (for Melovaz and Tiarin)
+                        if (track && track.source === 'melovaz' && track.isAlbumOrPlaylist) {
+                            this.openMelovazAlbumDetail(track);
+                            return;
+                        }
+                        if (track && track.source === 'tiarin' && track.isAlbumOrPlaylist) {
+                            this.openTiarinAlbumDetail(track);
+                            return;
+                        }
+                        
                         // For explore items:
                         // - اگر پلی‌لیست دایرکتوری لود شده (isDirectoryPlaylist)، بر اساس id در this.playlist پیدا کن
                         // - در غیر این صورت، مستقیماً از خود آبجکت track پخش کن
@@ -2571,6 +3262,70 @@ class MusicPlayer {
                 return;
             }
             if (source === 'explore') {
+                // ALWAYS check if track is an album or playlist FIRST (for Melovaz and Tiarin)
+                // This must happen before any play logic
+                if (track && (track.source === 'melovaz' || track.source === 'tiarin')) {
+                    // Debug log
+                    console.log('[Explore Click]', {
+                        source: track.source,
+                        title: track.title,
+                        url: track.url,
+                        isAlbumOrPlaylist: track.isAlbumOrPlaylist,
+                        trackObject: track
+                    });
+                    
+                    // Re-check isAlbumOrPlaylist if not set (fallback detection)
+                    // This is CRITICAL for "latest" list where detection might fail
+                    let shouldOpenDetail = track.isAlbumOrPlaylist;
+                    
+                    if (!shouldOpenDetail) {
+                        // Fallback 1: ALWAYS check title for "Album" keyword (most reliable)
+                        // This is CRITICAL for "latest" list - title is the most reliable indicator
+                        const titleLower = (track.title || '').toLowerCase();
+                        if (/\b(album|playlist|آلبوم|پلی\s*لیست)\b/i.test(titleLower)) {
+                            shouldOpenDetail = true;
+                            console.log('[Explore Click] ✅ Fallback 1: Detected album/playlist from title:', track.title);
+                        }
+                        
+                        // Fallback 2: check URL structure
+                        if (!shouldOpenDetail && track.url) {
+                            const urlPath = track.url.split('?')[0].split('#')[0].toLowerCase();
+                            if (urlPath.includes('/album/') || 
+                                urlPath.includes('/playlist/') ||
+                                urlPath.includes('/tag/album') ||
+                                urlPath.includes('/tag/playlist') ||
+                                urlPath.match(/\/(album|playlist|tag)\//i)) {
+                                shouldOpenDetail = true;
+                                console.log('[Explore Click] ✅ Fallback 2: Detected album/playlist from URL:', track.url);
+                            }
+                        }
+                    }
+                    
+                    // For Melovaz: open detail if album/playlist detected
+                    if (track.source === 'melovaz' && shouldOpenDetail) {
+                        console.log('[Explore Click] 🎯 Opening Melovaz album detail:', track.title);
+                        this.openMelovazAlbumDetail(track);
+                        return;
+                    }
+                    // For Tiarin: open detail if album/playlist detected
+                    if (track.source === 'tiarin' && shouldOpenDetail) {
+                        console.log('[Explore Click] 🎯 Opening Tiarin album detail:', track.title);
+                        this.openTiarinAlbumDetail(track);
+                        return;
+                    }
+                    
+                    // If we reach here and it's Melovaz/Tiarin but not detected as album/playlist, log warning
+                    if (track.source === 'melovaz' || track.source === 'tiarin') {
+                        console.warn('[Explore Click] ⚠️ Melovaz/Tiarin track NOT opening detail:', {
+                            title: track.title,
+                            url: track.url,
+                            isAlbumOrPlaylist: track.isAlbumOrPlaylist,
+                            shouldOpenDetail: shouldOpenDetail
+                        });
+                    }
+                }
+                
+                // Only play if it's confirmed to be a single track
                 if (this.isDirectoryPlaylist && this.playlist && this.playlist.length > 0) {
                     const trackIndex = this.playlist.findIndex(t => String(t.id) === String(track.id));
                     if (trackIndex !== -1) {
@@ -2973,14 +3728,43 @@ class MusicPlayer {
             document.querySelectorAll('.track-item').forEach(el => el.classList.remove('active'));
             return;
         }
-        const currentUrlNorm = (current.url && this.normalizeUrl((current.url || '').trim())) || '';
-        const currentPageUrlNorm = (current.pageUrl && this.normalizeUrl((current.pageUrl || '').trim())) || '';
+        
+        // ONLY use URL for comparison - IDs can be duplicate across different lists
+        // Check both url and pageUrl for current track
+        const currentUrl = (current.url || '').trim();
+        const currentPageUrl = (current.pageUrl || '').trim();
+        const currentUrlNorm = currentUrl ? this.normalizeUrl(currentUrl) : '';
+        const currentPageUrlNorm = currentPageUrl ? this.normalizeUrl(currentPageUrl) : '';
+        
+        if (!currentUrlNorm && !currentPageUrlNorm) {
+            // If current track has no URL, remove all active states
+            document.querySelectorAll('.track-item').forEach(el => el.classList.remove('active'));
+            return;
+        }
+        
         document.querySelectorAll('.track-item').forEach(el => {
-            const trackId = el.dataset.trackId;
             const trackUrl = (el.dataset.trackUrl || '').trim();
-            const matchById = trackId != null && String(current.id) === String(trackId);
-            const matchByUrl = trackUrl && (currentUrlNorm === trackUrl || currentPageUrlNorm === trackUrl);
-            const isActive = matchById || matchByUrl;
+            if (!trackUrl) {
+                el.classList.remove('active');
+                return;
+            }
+            
+            // Match by URL - check against both current.url and current.pageUrl
+            const isActive = (currentUrlNorm && trackUrl === currentUrlNorm) || 
+                           (currentPageUrlNorm && trackUrl === currentPageUrlNorm);
+            
+            // Debug log for troubleshooting
+            if (isActive) {
+                const trackTitle = el.querySelector('.track-title, .track-title-compact')?.textContent || 'unknown';
+                console.log('[updatePlayingStateInAllViews] ✅ Setting active:', {
+                    trackTitle: trackTitle,
+                    trackUrl: trackUrl,
+                    currentUrlNorm: currentUrlNorm,
+                    currentPageUrlNorm: currentPageUrlNorm,
+                    currentTitle: current.title
+                });
+            }
+            
             el.classList.toggle('active', !!isActive);
         });
     }
@@ -6071,6 +6855,7 @@ class MusicPlayer {
             // Ensure search history is displayed
             this.displaySearchHistory();
         } else if (page === 'explore') {
+            this.updateExploreSectionsVisibility();
             this.loadExploreData();
         } else if (page === 'settings') {
             this.updateSettingsPage();
@@ -6230,14 +7015,41 @@ class MusicPlayer {
         this.audioPlayer.addEventListener('play', () => this.updateMediaSession?.());
     }
 
-    // Load explore page data (latest, top monthly, podcasts)
+    // Update explore sections visibility based on current source
+    updateExploreSectionsVisibility() {
+        const src = this.currentExploreSource || 'tehran';
+        document.querySelectorAll('.explore-section').forEach(section => {
+            const sectionSource = section.getAttribute('data-source');
+            section.style.display = sectionSource === src ? '' : 'none';
+        });
+    }
+    
+    // Load explore page data (latest, top monthly, podcasts) by current source
     async loadExploreData() {
         try {
-        await Promise.all([
-            this.loadLatestTracks(),
-            this.loadTopMonthly(),
-            this.loadPodcasts()
-        ]);
+            const src = this.currentExploreSource || 'tehran';
+            if (src === 'tehran') {
+                await Promise.all([
+                    this.loadLatestTracks(),
+                    this.loadTopMonthly(),
+                    this.loadPodcasts()
+                ]);
+            } else if (src === 'melovaz') {
+                await Promise.all([
+                    // this.loadExploreSectionMelovaz('latest'), // Removed: latest list removed from UI
+                    this.loadExploreSectionMelovaz('albums'),
+                    this.loadExploreSectionMelovaz('singles'),
+                    this.loadExploreSectionMelovaz('playlists')
+                ]);
+            } else if (src === 'tiarin') {
+                await Promise.all([
+                    this.loadExploreSectionTiarin('latest'),
+                    this.loadExploreSectionTiarin('top'),
+                    this.loadExploreSectionTiarin('singles'),
+                    this.loadExploreSectionTiarin('playlists'),
+                    this.loadExploreSectionTiarin('albums')
+                ]);
+            }
         } catch (e) {
             console.error('Error loading explore data:', e);
         }
@@ -6328,6 +7140,39 @@ class MusicPlayer {
         
         console.error(`All proxy services failed for ${url} after ${retryCount + 1} attempts`);
         return { items: [], hasMore: false };
+    }
+    
+    // Fetch raw HTML from URL via proxy (for Melovaz/Tiarin explore)
+    async fetchPageHtml(url, retryCount = 0, maxRetries = 1) {
+        const proxyServices = [
+            { name: 'allorigins', getUrl: (u) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`, parseResponse: async (r) => (r.headers.get('content-type')?.includes('application/json') ? (await r.json()).contents : await r.text()) },
+            { name: 'proxy', getUrl: (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`, parseResponse: async (r) => await r.text() }
+        ];
+        const proxyPromises = proxyServices.map(async (proxy) => {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 8000);
+                const response = await fetch(proxy.getUrl(url), { method: 'GET', headers: { 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' }, signal: controller.signal });
+                clearTimeout(timeoutId);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const html = await proxy.parseResponse(response);
+                if (!html || !html.trim()) throw new Error('Empty response');
+                return { html, success: true };
+            } catch (e) { return { error: e, success: false }; }
+        });
+        try {
+            const raceResult = await Promise.race(proxyPromises);
+            if (raceResult.success) return raceResult.html;
+        } catch (_) {}
+        const results = await Promise.allSettled(proxyPromises);
+        for (const r of results) {
+            if (r.status === 'fulfilled' && r.value.success) return r.value.html;
+        }
+        if (retryCount < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+            return this.fetchPageHtml(url, retryCount + 1, maxRetries);
+        }
+        return '';
     }
     
     // Parse explore items from HTML
@@ -6437,21 +7282,26 @@ class MusicPlayer {
         
         const url = 'https://mytehranmusic.com/';
         
+        // Check cache first
         const cached = this.getCachedExploreItems(url);
         if (cached && cached.length > 0) {
+            // Cache exists and is valid (less than 2 hours old)
+            // Use cache directly, don't fetch from website
+            console.log('[loadLatestTracks] Using cached data for:', url);
             this.renderExploreItems(this.latestTracksList, cached, true, 'latest');
-            this.latestTracksList.insertAdjacentHTML('afterbegin', '<div class="explore-loading-inline"><div class="spinner spinner-small"></div></div>');
-        } else {
-            this.latestTracksList.innerHTML = '<div class="explore-loading"><div class="spinner spinner-small"></div></div>';
+            return; // Exit early, don't fetch from website
         }
+        
+        // No valid cache, show loading and fetch from website
+        this.latestTracksList.innerHTML = '<div class="explore-loading"><div class="spinner spinner-small"></div></div>';
         
         const { items, hasMore } = await this.fetchExploreItems(url, 5);
         
-        const loadingEl = this.latestTracksList.querySelector('.explore-loading-inline');
-        if (loadingEl) loadingEl.remove();
-        
-        if (this.hasItemsChanged(cached, items)) {
-            this.renderExploreItems(this.latestTracksList, items, hasMore, 'latest');
+        // Render and cache the items
+        this.renderExploreItems(this.latestTracksList, items, hasMore, 'latest');
+        if (items && items.length > 0) {
+            this.cacheExploreItems(url, items);
+            console.log('[loadLatestTracks] Cached items for:', url);
         }
     }
     
@@ -6461,35 +7311,32 @@ class MusicPlayer {
         
         const url = 'https://mytehranmusic.com/top-month-tehranmusic/';
         
+        // Check cache first
         const cached = this.getCachedExploreItems(url);
         if (cached && cached.length > 0) {
+            // Cache exists and is valid (less than 2 hours old)
+            // Use cache directly, don't fetch from website
+            console.log('[loadTopMonthly] Using cached data for:', url);
             this.renderExploreItems(this.topMonthlyList, cached, true, 'topMonthly');
-            this.topMonthlyList.insertAdjacentHTML('afterbegin', '<div class="explore-loading-inline"><div class="spinner spinner-small"></div></div>');
-        } else {
-            this.topMonthlyList.innerHTML = '<div class="explore-loading"><div class="spinner spinner-small"></div></div>';
+            return; // Exit early, don't fetch from website
         }
+        
+        // No valid cache, show loading and fetch from website
+        this.topMonthlyList.innerHTML = '<div class="explore-loading"><div class="spinner spinner-small"></div></div>';
         
         try {
             const { items, hasMore } = await this.fetchExploreItems(url, 5);
             
-            const loadingEl = this.topMonthlyList.querySelector('.explore-loading-inline');
-            if (loadingEl) loadingEl.remove();
-            
             if (items && items.length > 0) {
-                if (this.hasItemsChanged(cached, items)) {
-                    this.renderExploreItems(this.topMonthlyList, items, hasMore, 'topMonthly');
-                }
-            } else if (!cached || cached.length === 0) {
+                this.renderExploreItems(this.topMonthlyList, items, hasMore, 'topMonthly');
+                this.cacheExploreItems(url, items);
+                console.log('[loadTopMonthly] Cached items for:', url);
+            } else {
                 this.topMonthlyList.innerHTML = '<div class="explore-loading"><p>موردی یافت نشد</p></div>';
             }
         } catch (error) {
             console.error('Error loading top monthly tracks:', error);
-            const loadingEl = this.topMonthlyList.querySelector('.explore-loading-inline');
-            if (loadingEl) loadingEl.remove();
-            
-            if (!cached || cached.length === 0) {
-                this.topMonthlyList.innerHTML = '<div class="explore-loading"><p>خطا در بارگذاری</p></div>';
-            }
+            this.topMonthlyList.innerHTML = '<div class="explore-loading"><p>خطا در بارگذاری</p></div>';
         }
     }
     
@@ -6499,21 +7346,157 @@ class MusicPlayer {
         
         const url = 'https://mytehranmusic.com/podcasts/';
         
+        // Check cache first
         const cached = this.getCachedExploreItems(url);
         if (cached && cached.length > 0) {
+            // Cache exists and is valid (less than 2 hours old)
+            // Use cache directly, don't fetch from website
+            console.log('[loadPodcasts] Using cached data for:', url);
             this.renderExploreItems(this.podcastsList, cached, true, 'podcasts');
-            this.podcastsList.insertAdjacentHTML('afterbegin', '<div class="explore-loading-inline"><div class="spinner spinner-small"></div></div>');
-        } else {
-            this.podcastsList.innerHTML = '<div class="explore-loading"><div class="spinner spinner-small"></div></div>';
+            return; // Exit early, don't fetch from website
         }
+        
+        // No valid cache, show loading and fetch from website
+        this.podcastsList.innerHTML = '<div class="explore-loading"><div class="spinner spinner-small"></div></div>';
         
         const { items, hasMore } = await this.fetchExploreItems(url, 5);
         
-        const loadingEl = this.podcastsList.querySelector('.explore-loading-inline');
-        if (loadingEl) loadingEl.remove();
+        // Render and cache the items
+        this.renderExploreItems(this.podcastsList, items, hasMore, 'podcasts');
+        if (items && items.length > 0) {
+            this.cacheExploreItems(url, items);
+            console.log('[loadPodcasts] Cached items for:', url);
+        }
+    }
+    
+    async loadExploreSectionMelovaz(type) {
+        let container, url;
+        if (type === 'latest') {
+            container = this.melovazLatestList;
+            url = 'https://melovaz.ir/';
+        } else if (type === 'albums') {
+            container = this.melovazAlbumsList;
+            url = 'https://melovaz.ir/tag/%D8%A2%D9%84%D8%A8%D9%88%D9%85';
+        } else if (type === 'singles') {
+            container = this.melovazSinglesList;
+            url = 'https://melovaz.ir/tag/%D8%AA%DA%A9-%D8%A2%D9%87%D9%86%DA%AF';
+        } else if (type === 'playlists') {
+            container = this.melovazPlaylistsList;
+            url = 'https://melovaz.ir/tag/playlist';
+        }
+        if (!container) return;
         
-        if (this.hasItemsChanged(cached, items)) {
-            this.renderExploreItems(this.podcastsList, items, hasMore, 'podcasts');
+        // Check cache first
+        const cached = this.getCachedExploreItems(url);
+        if (cached && cached.length > 0) {
+            // Cache exists and is valid (less than 2 hours old)
+            // Use cache directly, don't fetch from website
+            console.log('[loadExploreSectionMelovaz] Using cached data for:', url);
+            this.renderExploreItems(container, cached, true, type);
+            return; // Exit early, don't fetch from website
+        }
+        
+        // No valid cache, show loading and fetch from website
+        container.innerHTML = '<div class="explore-loading"><div class="spinner spinner-small"></div></div>';
+        
+        try {
+            const html = await this.fetchPageHtml(url);
+            if (!html) {
+                container.innerHTML = '<div class="explore-loading"><p>خطا در بارگذاری</p></div>';
+                return;
+            }
+            const { results, hasMore } = this.parseSearchResultsMelovaz(html, '', 1);
+            const items = (results || []).slice(0, 5);
+            
+            // Debug: log all items to check isAlbumOrPlaylist
+            console.log('[loadExploreSectionMelovaz] Parsed items:', items.map(item => ({
+                title: item.title,
+                url: item.url,
+                isAlbumOrPlaylist: item.isAlbumOrPlaylist,
+                source: item.source
+            })));
+            
+            // Debug: log first item image
+            if (items.length > 0 && !items[0].image) {
+                console.warn('Melovaz: No image found for first item:', items[0].title);
+            }
+            
+            // Render and cache the items
+            this.renderExploreItems(container, items, !!hasMore, type);
+            if (items.length > 0) {
+                this.cacheExploreItems(url, items);
+                console.log('[loadExploreSectionMelovaz] Cached items for:', url);
+            }
+        } catch (e) {
+            console.error('Error loading explore Melovaz:', e);
+            container.innerHTML = '<div class="explore-loading"><p>خطا در بارگذاری</p></div>';
+        }
+    }
+    
+    async loadExploreSectionTiarin(type) {
+        let container, url;
+        if (type === 'latest') {
+            container = this.tiarinLatestList;
+            url = 'https://tiarin.ir/';
+        } else if (type === 'top') {
+            container = this.tiarinTopList;
+            url = 'https://tiarin.ir/hashtag/best-of-songs';
+        } else if (type === 'singles') {
+            container = this.tiarinSinglesList;
+            url = 'https://tiarin.ir/single';
+        } else if (type === 'playlists') {
+            container = this.tiarinPlaylistsList;
+            url = 'https://tiarin.ir/playlist';
+        } else if (type === 'albums') {
+            container = this.tiarinAlbumsList;
+            url = 'https://tiarin.ir/album';
+        }
+        if (!container) return;
+        
+        // Check cache first
+        const cached = this.getCachedExploreItems(url);
+        if (cached && cached.length > 0) {
+            // Cache exists and is valid (less than 2 hours old)
+            // Use cache directly, don't fetch from website
+            console.log('[loadExploreSectionTiarin] Using cached data for:', url);
+            this.renderExploreItems(container, cached, true, type);
+            return; // Exit early, don't fetch from website
+        }
+        
+        // No valid cache, show loading and fetch from website
+        container.innerHTML = '<div class="explore-loading"><div class="spinner spinner-small"></div></div>';
+        
+        try {
+            const html = await this.fetchPageHtml(url);
+            if (!html) {
+                container.innerHTML = '<div class="explore-loading"><p>خطا در بارگذاری</p></div>';
+                return;
+            }
+            const { results, hasMore } = this.parseSearchResultsTiarin(html, '', 1);
+            const items = (results || []).slice(0, 5);
+            
+            // Debug: log all items to check isAlbumOrPlaylist
+            console.log('[loadExploreSectionTiarin] Parsed items:', items.map(item => ({
+                title: item.title,
+                url: item.url,
+                isAlbumOrPlaylist: item.isAlbumOrPlaylist,
+                source: item.source
+            })));
+            
+            // Debug: log first item image
+            if (items.length > 0 && !items[0].image) {
+                console.warn('Tiarin: No image found for first item:', items[0].title);
+            }
+            
+            // Render and cache the items
+            this.renderExploreItems(container, items, !!hasMore, type);
+            if (items.length > 0) {
+                this.cacheExploreItems(url, items);
+                console.log('[loadExploreSectionTiarin] Cached items for:', url);
+            }
+        } catch (e) {
+            console.error('Error loading explore Tiarin:', e);
+            container.innerHTML = '<div class="explore-loading"><p>خطا در بارگذاری</p></div>';
         }
     }
     
@@ -6524,6 +7507,17 @@ class MusicPlayer {
         container.innerHTML = '';
         
         items.forEach(track => {
+            // Debug: log album/playlist detection
+            if (track && (track.source === 'melovaz' || track.source === 'tiarin')) {
+                console.log('[renderExploreItems]', {
+                    title: track.title,
+                    source: track.source,
+                    url: track.url,
+                    isAlbumOrPlaylist: track.isAlbumOrPlaylist,
+                    type: type
+                });
+            }
+            
             const trackEl = this.createExploreItem(track, type);
             container.appendChild(trackEl);
         });
@@ -6549,6 +7543,16 @@ class MusicPlayer {
     // Create explore item element (reuse track card)
     // type: 'latest' | 'topMonthly' | 'podcasts'
     createExploreItem(track, type = 'explore') {
+        // Debug: ensure isAlbumOrPlaylist is preserved
+        if (track && (track.source === 'melovaz' || track.source === 'tiarin')) {
+            console.log('[createExploreItem]', {
+                title: track.title,
+                source: track.source,
+                isAlbumOrPlaylist: track.isAlbumOrPlaylist,
+                type: type
+            });
+        }
+        
         const source = type === 'topMonthly' ? 'explore-top' : 'explore';
         return this.createTrackElement(track, source);
     }
@@ -6585,40 +7589,90 @@ class MusicPlayer {
                 this.exploreDetailInfiniteLoader.style.display = 'flex';
         }
         
+        const src = this.currentExploreSource || 'tehran';
         let url = '';
         let title = '';
         
-        switch (type) {
-            case 'latest':
-                url = 'https://mytehranmusic.com/';
-                title = 'آهنگ‌های جدید';
-                break;
-            case 'topMonthly':
-                url = 'https://mytehranmusic.com/top-month-tehranmusic/';
-                title = 'برترین‌های ماه';
-                break;
-            case 'podcasts':
-                url = 'https://mytehranmusic.com/podcasts/';
-                title = 'پادکست‌ها';
-                break;
+        if (src === 'tehran') {
+            switch (type) {
+                case 'latest':
+                    url = page > 1 ? `https://mytehranmusic.com/page/${page}/` : 'https://mytehranmusic.com/';
+                    title = 'آهنگ‌های جدید';
+                    break;
+                case 'topMonthly':
+                    url = page > 1 ? `https://mytehranmusic.com/top-month-tehranmusic/page/${page}/` : 'https://mytehranmusic.com/top-month-tehranmusic/';
+                    title = 'برترین‌های ماه';
+                    break;
+                case 'podcasts':
+                    url = page > 1 ? `https://mytehranmusic.com/podcasts/page/${page}/` : 'https://mytehranmusic.com/podcasts/';
+                    title = 'پادکست‌ها';
+                    break;
+            }
+        } else if (src === 'melovaz') {
+            if (type === 'latest') {
+                url = page > 1 ? `https://melovaz.ir/page/${page}/` : 'https://melovaz.ir/';
+                title = 'جدیدترین‌ها';
+            } else if (type === 'albums') {
+                url = page > 1 ? `https://melovaz.ir/tag/%D8%A2%D9%84%D8%A8%D9%88%D9%85/page/${page}/` : 'https://melovaz.ir/tag/%D8%A2%D9%84%D8%A8%D9%88%D9%85';
+                title = 'آلبوم‌ها';
+            } else if (type === 'singles') {
+                url = page > 1 ? `https://melovaz.ir/tag/%D8%AA%DA%A9-%D8%A2%D9%87%D9%86%DA%AF/page/${page}/` : 'https://melovaz.ir/tag/%D8%AA%DA%A9-%D8%A2%D9%87%D9%86%DA%AF';
+                title = 'تک‌آهنگ‌ها';
+            } else if (type === 'playlists') {
+                url = page > 1 ? `https://melovaz.ir/tag/playlist/page/${page}/` : 'https://melovaz.ir/tag/playlist';
+                title = 'پلی‌لیست‌ها';
+            } else {
+                url = page > 1 ? `https://melovaz.ir/page/${page}/` : 'https://melovaz.ir/';
+                title = 'ملواز';
+            }
+        } else if (src === 'tiarin') {
+            if (type === 'latest') {
+                url = page > 1 ? `https://tiarin.ir/page/${page}/` : 'https://tiarin.ir/';
+                title = 'جدیدترین‌ها';
+            } else if (type === 'top') {
+                url = page > 1 ? `https://tiarin.ir/hashtag/best-of-songs?paged=${page}` : 'https://tiarin.ir/hashtag/best-of-songs';
+                title = 'برترین‌ها';
+            } else if (type === 'singles') {
+                url = page > 1 ? `https://tiarin.ir/single?paged=${page}` : 'https://tiarin.ir/single';
+                title = 'تک‌آهنگ‌ها';
+            } else if (type === 'playlists') {
+                url = page > 1 ? `https://tiarin.ir/playlist?paged=${page}` : 'https://tiarin.ir/playlist';
+                title = 'پلی‌لیست‌ها';
+            } else if (type === 'albums') {
+                url = page > 1 ? `https://tiarin.ir/album?paged=${page}` : 'https://tiarin.ir/album';
+                title = 'آلبوم‌ها';
+            } else {
+                url = page > 1 ? `https://tiarin.ir/page/${page}/` : 'https://tiarin.ir/';
+                title = 'تیارین';
+            }
         }
         
         if (this.exploreDetailTitle) {
             this.exploreDetailTitle.textContent = title;
         }
         
-        if (page > 1) {
-            if (type === 'latest') {
-                url = `https://mytehranmusic.com/page/${page}/`;
-            } else if (type === 'topMonthly') {
-                url = `https://mytehranmusic.com/top-month-tehranmusic/page/${page}/`;
-            } else if (type === 'podcasts') {
-                url = `https://mytehranmusic.com/podcasts/page/${page}/`;
-            }
-        }
-        
         try {
-            const { items, hasMore } = await this.fetchExploreItems(url, 20, 0, maxRetries);
+            let items = [];
+            let hasMore = false;
+            if (src === 'tehran') {
+                const out = await this.fetchExploreItems(url, 20, 0, maxRetries);
+                items = out.items || [];
+                hasMore = out.hasMore || false;
+            } else if (src === 'melovaz') {
+                const html = await this.fetchPageHtml(url);
+                if (html) {
+                    const parsed = this.parseSearchResultsMelovaz(html, '', page);
+                    items = (parsed.results || []).slice(0, 20);
+                    hasMore = parsed.hasMore || false;
+                }
+            } else if (src === 'tiarin') {
+                const html = await this.fetchPageHtml(url);
+                if (html) {
+                    const parsed = this.parseSearchResultsTiarin(html, '', page);
+                    items = (parsed.results || []).slice(0, 20);
+                    hasMore = parsed.hasMore || false;
+                }
+            }
             this.exploreHasMore = hasMore;
             this.currentExplorePage = page;
             
@@ -6724,7 +7778,7 @@ class MusicPlayer {
         
         if (cached && cached.items) {
             const cacheAge = Date.now() - cached.timestamp;
-            if (cacheAge < 3600000) { // 1 hour
+            if (cacheAge < 7200000) { // 2 hours (7200000 milliseconds)
                 return cached.items;
             }
         }
@@ -6760,12 +7814,17 @@ class MusicPlayer {
         try {
             const cacheToSave = {};
             Object.keys(this.exploreCache).forEach(key => {
-                cacheToSave[key] = {
-                    items: this.exploreCache[key].items,
-                    timestamp: this.exploreCache[key].timestamp
-                };
+                const cached = this.exploreCache[key];
+                // Only save cache that is still valid (less than 2 hours old)
+                const cacheAge = Date.now() - cached.timestamp;
+                if (cacheAge < 7200000) { // 2 hours
+                    cacheToSave[key] = {
+                        items: cached.items,
+                        timestamp: cached.timestamp
+                    };
+                }
             });
-            localStorage.setItem('mytehranExploreCache', JSON.stringify(cacheToSave));
+            localStorage.setItem('exploreCache', JSON.stringify(cacheToSave));
         } catch (e) {
             console.warn('Could not save explore cache:', e);
         }
@@ -6773,9 +7832,27 @@ class MusicPlayer {
     
     loadExploreCache() {
         try {
-            const cached = localStorage.getItem('mytehranExploreCache');
+            // Try new cache name first, then fallback to old name for migration
+            let cached = localStorage.getItem('exploreCache');
+            if (!cached) {
+                cached = localStorage.getItem('mytehranExploreCache');
+            }
             if (cached) {
-                this.exploreCache = JSON.parse(cached);
+                const parsedCache = JSON.parse(cached);
+                // Filter out expired cache entries (older than 2 hours)
+                const now = Date.now();
+                const validCache = {};
+                Object.keys(parsedCache).forEach(key => {
+                    const cacheAge = now - parsedCache[key].timestamp;
+                    if (cacheAge < 7200000) { // 2 hours
+                        validCache[key] = parsedCache[key];
+                    }
+                });
+                this.exploreCache = validCache;
+                // Save cleaned cache back
+                if (Object.keys(validCache).length !== Object.keys(parsedCache).length) {
+                    this.saveExploreCache();
+                }
             } else {
                 this.exploreCache = {};
             }
