@@ -2,7 +2,8 @@
 
 const SEARCH_SOURCES = {
     tehran: 'tehran',
-    melovaz: 'melovaz'
+    melovaz: 'melovaz',
+    tiarin: 'tiarin'
 };
 
 class MusicPlayer {
@@ -308,7 +309,7 @@ class MusicPlayer {
         document.querySelectorAll('.search-source-tab').forEach(tab => {
             tab.addEventListener('click', () => {
                 const source = tab.dataset.source;
-                if (source !== SEARCH_SOURCES.tehran && source !== SEARCH_SOURCES.melovaz) return;
+                if (source !== SEARCH_SOURCES.tehran && source !== SEARCH_SOURCES.melovaz && source !== SEARCH_SOURCES.tiarin) return;
                 this.currentSearchSource = source;
                 document.querySelectorAll('.search-source-tab').forEach(t => {
                     t.classList.toggle('active', t.dataset.source === source);
@@ -1115,6 +1116,233 @@ class MusicPlayer {
         return { results, hasMore, page };
     }
 
+    async fetchSearchResultsTiarin(query, page = 1) {
+        const searchUrl = `https://tiarin.ir/?s=${encodeURIComponent(query)}${page > 1 ? `&paged=${page}` : ''}`;
+        let htmlContent = '';
+        const enc = encodeURIComponent(searchUrl);
+        const proxies = [
+            async () => {
+                const res = await fetch(`https://corsproxy.io/?${enc}`, { mode: 'cors' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                return await res.text();
+            },
+            async () => {
+                const res = await fetch(`https://api.allorigins.win/raw?url=${enc}`, { mode: 'cors' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                return await res.text();
+            },
+            async () => {
+                const res = await fetch(`https://api.allorigins.win/get?url=${enc}`, { mode: 'cors' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                return (data && data.contents) ? data.contents : '';
+            },
+            async () => {
+                const res = await fetch(`https://api.codetabs.com/v1/proxy?quest=${enc}`, { mode: 'cors' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                return await res.text();
+            }
+        ];
+        for (const fn of proxies) {
+            try {
+                htmlContent = await fn();
+                if (htmlContent && htmlContent.length > 500) break;
+            } catch (e) {
+                console.warn('Tiarin proxy attempt failed:', e);
+            }
+        }
+        if (!htmlContent) throw new Error('نتوانستیم صفحه جستجوی تیارین را بارگذاری کنیم.');
+        return this.parseSearchResultsTiarin(htmlContent, query, page);
+    }
+
+    parseSearchResultsTiarin(html, query, page = 1) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const results = [];
+        const baseUrl = 'https://tiarin.ir';
+        const blockedTitles = ['درباره تیارین', 'تماس با ما', 'راهنما و آموزش ها', 'راهنما', 'درباره ما', 'ورود', 'ثبت نام', 'خانه', 'صفحه اصلی', 'about', 'contact', 'نمایش بیشتر'];
+        const isBlockedTitle = (title) => {
+            if (!title) return true;
+            const t = title.trim();
+            return blockedTitles.some(b => t === b || t.includes(b));
+        };
+        const toFullUrl = (href) => {
+            const h = (href || '').trim();
+            return h.startsWith('http') ? h : (h.startsWith('/') ? baseUrl + h : baseUrl + '/' + h);
+        };
+        const seenUrls = new Set();
+
+        // هر نتیجه یک section.postinfo دارد؛ برای هر کدوم باکس = والد مستقیم یا نزدیک‌ترین ancestori که لینک محتوا دارد (تا هر نتیجه لینک خودش را بگیرد)
+        const postinfoSections = doc.querySelectorAll('section.postinfo');
+        postinfoSections.forEach((postinfo, index) => {
+            let box = null;
+            let a = null;
+            let p = postinfo.parentElement;
+            while (p && p !== doc.body) {
+                a = p.querySelector('a[href*="tiarin.ir/album"], a[href*="tiarin.ir/single"], a[href*="tiarin.ir/hashtag"], a[href*="tiarin.ir/playlist"]');
+                if (a && !a.href.includes('/genre/') && !a.href.includes('/publisher/')) {
+                    box = p;
+                    break;
+                }
+                p = p.parentElement;
+            }
+            if (!box || !a) return;
+            const href = a.getAttribute('href') || a.href;
+            if (!href || href.includes('/genre/') || href.includes('/mood/') || href.includes('/publisher/')) return;
+            const fullUrl = toFullUrl(href);
+            const norm = fullUrl.replace(/#.*$/, '');
+            if (seenUrls.has(norm)) return;
+            seenUrls.add(norm);
+
+            const liAl = (box.querySelector('li.index-al') || postinfo.querySelector('li.index-al'));
+            const liAr = (box.querySelector('li.index-ar') || postinfo.querySelector('li.index-ar'));
+            let title = liAl ? (liAl.textContent || '').trim().replace(/\s+/g, ' ') : '';
+            let artist = liAr ? (liAr.textContent || '').trim().replace(/\s+/g, ' ') : '';
+            if (!title) {
+                const titleEl = box.querySelector('.entry-title a, h2 a, h3 a, .title a, .album-title, [class*="title"]');
+                title = titleEl ? (titleEl.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 200) : (a.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 200);
+            }
+            if (!artist) {
+                const artistLink = box.querySelector('a[href*="tiarin.ir/artist"]') || postinfo.querySelector('a[href*="tiarin.ir/artist"]');
+                artist = artistLink ? (artistLink.textContent || '').trim().replace(/\s+/g, ' ') : 'تیارین';
+            }
+            if (!title && box.querySelector('img')?.alt) title = (box.querySelector('img').alt || '').trim().slice(0, 200);
+            if (!title || title.length < 2 || isBlockedTitle(title)) return;
+            if (!artist) artist = 'تیارین';
+
+            let trackCount = 0;
+            const indexDaList = postinfo.querySelectorAll('li.index-da');
+            const lastIndexDa = indexDaList.length ? indexDaList[indexDaList.length - 1] : null;
+            if (lastIndexDa) {
+                const daText = (lastIndexDa.textContent || '').trim();
+                const match = daText.match(/(\d+)\s*Tracks?/i) || daText.match(/(\d+)\s*ترک/i);
+                if (match) trackCount = parseInt(match[1], 10) || 0;
+            }
+            const isAlbumOrPlaylist = trackCount > 1;
+
+            const img = box.querySelector('img');
+            let image = img ? (img.src || img.getAttribute('src') || '') : '';
+            if (image && !image.startsWith('http')) image = image.startsWith('/') ? baseUrl + image : baseUrl + '/' + image;
+
+            results.push({
+                id: 'tiarin-' + (page - 1) * 100 + index,
+                title: title.slice(0, 200),
+                artist: artist,
+                url: fullUrl,
+                pageUrl: fullUrl,
+                image: image || '',
+                source: 'tiarin',
+                isAlbumOrPlaylist: isAlbumOrPlaylist
+            });
+        });
+
+        // اگر با section.postinfo چیزی نیامد، fallback: همه لینک‌های آلبوم/تک/پلی‌لیست و باکس از طریق .box-i
+        if (results.length === 0) {
+            const boxItems = doc.querySelectorAll('.box-i, div.box-i, .postbox-i, [class*="box-i"]');
+            boxItems.forEach((box, index) => {
+                const a = box.querySelector('a[href*="tiarin.ir/album"], a[href*="tiarin.ir/single"], a[href*="tiarin.ir/hashtag"], a[href*="tiarin.ir/playlist"]');
+                if (!a) return;
+                const href = a.getAttribute('href') || a.href;
+                if (href.includes('/genre/') || href.includes('/publisher/')) return;
+                const fullUrl = toFullUrl(href);
+                if (seenUrls.has(fullUrl.replace(/#.*$/, ''))) return;
+                seenUrls.add(fullUrl.replace(/#.*$/, ''));
+
+                const liAl = box.querySelector('li.index-al');
+                const liAr = box.querySelector('li.index-ar');
+                let title = liAl ? (liAl.textContent || '').trim().replace(/\s+/g, ' ') : (a.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 200);
+                let artist = liAr ? (liAr.textContent || '').trim().replace(/\s+/g, ' ') : 'تیارین';
+                const artistLink = box.querySelector('a[href*="tiarin.ir/artist"]');
+                if (artistLink) artist = (artistLink.textContent || '').trim().replace(/\s+/g, ' ');
+                if (!title || title.length < 2 || isBlockedTitle(title)) return;
+
+                let trackCount = 0;
+                const postinfo = box.querySelector('section.postinfo');
+                if (postinfo) {
+                    const indexDaList = postinfo.querySelectorAll('li.index-da');
+                    const lastIndexDa = indexDaList.length ? indexDaList[indexDaList.length - 1] : null;
+                    if (lastIndexDa) {
+                        const daText = (lastIndexDa.textContent || '').trim();
+                        const match = daText.match(/(\d+)\s*Tracks?/i) || daText.match(/(\d+)\s*ترک/i);
+                        if (match) trackCount = parseInt(match[1], 10) || 0;
+                    }
+                }
+                const isAlbumOrPlaylist = trackCount > 1;
+                const img = box.querySelector('img');
+                let image = img ? (img.src || img.getAttribute('src') || '') : '';
+                if (image && !image.startsWith('http')) image = image.startsWith('/') ? baseUrl + image : baseUrl + '/' + image;
+
+                results.push({
+                    id: 'tiarin-f-' + index + '-' + (page - 1) * 500,
+                    title: title.slice(0, 200),
+                    artist: artist,
+                    url: fullUrl,
+                    pageUrl: fullUrl,
+                    image: image || '',
+                    source: 'tiarin',
+                    isAlbumOrPlaylist: isAlbumOrPlaylist
+                });
+            });
+        }
+
+        // اگر هنوز خالی بود: از هر لینک محتوا یک آیتم بساز و با closest به باکس برو
+        if (results.length === 0) {
+            const contentLinks = doc.querySelectorAll('a[href*="tiarin.ir/album"], a[href*="tiarin.ir/single"], a[href*="tiarin.ir/hashtag"], a[href*="tiarin.ir/playlist"]');
+            contentLinks.forEach((a, index) => {
+                const href = a.getAttribute('href') || a.href;
+                if (!href || href.includes('/genre/') || href.includes('/publisher/')) return;
+                const fullUrl = toFullUrl(href);
+                if (seenUrls.has(fullUrl.replace(/#.*$/, ''))) return;
+                seenUrls.add(fullUrl.replace(/#.*$/, ''));
+
+                const parent = a.closest('.box-i, .postbox-i, article, [class*="box-i"], [class*="postbox-i"], section');
+                let title = (a.textContent || '').trim().replace(/\s+/g, ' ');
+                let artist = 'تیارین';
+                if (parent) {
+                    const liAl = parent.querySelector('li.index-al');
+                    if (liAl) title = (liAl.textContent || '').trim().replace(/\s+/g, ' ');
+                    const liAr = parent.querySelector('li.index-ar');
+                    if (liAr) artist = (liAr.textContent || '').trim().replace(/\s+/g, ' ');
+                    const artistLink = parent.querySelector('a[href*="tiarin.ir/artist"]');
+                    if (artistLink) artist = (artistLink.textContent || '').trim().replace(/\s+/g, ' ');
+                }
+                if (!title || title.length < 2) title = (a.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 200);
+                if (!title || title.length < 2 || isBlockedTitle(title)) return;
+
+                let trackCount = 0;
+                const postinfo = parent ? parent.querySelector('section.postinfo') : null;
+                if (postinfo) {
+                    const indexDaList = postinfo.querySelectorAll('li.index-da');
+                    const lastIndexDa = indexDaList.length ? indexDaList[indexDaList.length - 1] : null;
+                    if (lastIndexDa) {
+                        const daText = (lastIndexDa.textContent || '').trim();
+                        const match = daText.match(/(\d+)\s*Tracks?/i) || daText.match(/(\d+)\s*ترک/i);
+                        if (match) trackCount = parseInt(match[1], 10) || 0;
+                    }
+                }
+                const isAlbumOrPlaylist = trackCount > 1;
+                const img = parent ? parent.querySelector('img') : null;
+                let image = img ? (img.src || img.getAttribute('src') || '') : '';
+                if (image && !image.startsWith('http')) image = image.startsWith('/') ? baseUrl + image : baseUrl + '/' + image;
+
+                results.push({
+                    id: 'tiarin-link-' + index + '-' + (page - 1) * 500,
+                    title: title.slice(0, 200),
+                    artist: artist,
+                    url: fullUrl,
+                    pageUrl: fullUrl,
+                    image: image || '',
+                    source: 'tiarin',
+                    isAlbumOrPlaylist: isAlbumOrPlaylist
+                });
+            });
+        }
+
+        let hasMore = doc.querySelector('a.next.page-numbers, .nav-links a.next, a[rel="next"], .pagination a.next, link[rel="next"]') !== null;
+        if (!hasMore && results.length >= 6) hasMore = true;
+        return { results, hasMore, page };
+    }
+
     async loadMelovazAlbumAndPlay(albumTrack) {
         const pageUrl = albumTrack.url || albumTrack.pageUrl;
         if (!pageUrl || !pageUrl.includes('melovaz.ir')) return;
@@ -1444,6 +1672,316 @@ class MusicPlayer {
         return tracks;
     }
 
+    async loadTiarinAlbumAndPlay(albumTrack) {
+        const pageUrl = albumTrack.url || albumTrack.pageUrl;
+        if (!pageUrl || !pageUrl.includes('tiarin.ir')) return;
+        this.showLoading(true);
+        try {
+            const encoded = encodeURIComponent(pageUrl);
+            const proxyFetchers = [
+                () => fetch(`https://corsproxy.io/?${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.text() : Promise.reject(new Error(r.status))),
+                () => fetch(`https://api.allorigins.win/raw?url=${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.text() : Promise.reject(new Error(r.status))),
+                () => fetch(`https://api.allorigins.win/get?url=${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.json() : Promise.reject(new Error(r.status))).then(d => (d && d.contents) || ''),
+                () => fetch(`https://api.codetabs.com/v1/proxy?quest=${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.text() : Promise.reject(new Error(r.status))),
+                () => fetch(`https://api.cors.lol/?url=${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.json() : Promise.reject(new Error(r.status))).then(d => (d && d.contents) || (typeof d === 'string' ? d : ''))
+            ];
+            let html = '';
+            for (let i = 0; i < proxyFetchers.length; i++) {
+                try {
+                    html = await proxyFetchers[i]();
+                    if (html && html.length > 500) break;
+                } catch (e) {
+                    console.warn('loadTiarinAlbumAndPlay proxy', i + 1, 'failed:', e.message);
+                }
+            }
+            if (!html || html.length < 200) throw new Error('نتوانستیم صفحه را بارگذاری کنیم');
+            const tracks = this.parseTiarinAlbumPage(html, pageUrl, albumTrack);
+            if (tracks.length > 0) {
+                this.playlist = tracks;
+                this.currentIndex = 0;
+                this.shuffledIndices = [];
+                this.updatePlaylistDisplay();
+                this.loadAndPlay(tracks[0]);
+            } else {
+                const single = { id: 'tiarin-single', title: albumTrack.title, artist: albumTrack.artist, url: pageUrl, pageUrl, image: albumTrack.image || '', source: 'tiarin' };
+                this.playlist = [single];
+                this.currentIndex = 0;
+                this.updatePlaylistDisplay();
+                this.loadAndPlay(single);
+            }
+        } catch (e) {
+            console.error('loadTiarinAlbumAndPlay error:', e);
+            this.showError('خطا در بارگذاری آلبوم تیارین.', { retry: () => this.loadTiarinAlbumAndPlay(albumTrack) });
+        } finally {
+            this.showLoading(false);
+        }
+    }
+
+    async openTiarinAlbumDetail(albumTrack) {
+        const pageUrl = albumTrack.url || albumTrack.pageUrl;
+        if (!pageUrl || !pageUrl.includes('tiarin.ir')) return;
+        this.navigateToPage('exploreDetail');
+        if (this.exploreDetailTitle) this.exploreDetailTitle.textContent = albumTrack.title || 'آلبوم تیارین';
+        if (this.exploreDetailLoadingIndicator) this.exploreDetailLoadingIndicator.style.display = 'flex';
+        if (this.exploreDetailContainer) this.exploreDetailContainer.innerHTML = '';
+        if (this.exploreDetailInfiniteLoader) this.exploreDetailInfiniteLoader.style.display = 'none';
+        this.isDirectoryPlaylist = true;
+        const encoded = encodeURIComponent(pageUrl);
+        const proxyFetchers = [
+            () => fetch(`https://corsproxy.io/?${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.text() : Promise.reject(new Error(r.status))),
+            () => fetch(`https://api.allorigins.win/raw?url=${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.text() : Promise.reject(new Error(r.status))),
+            () => fetch(`https://api.allorigins.win/get?url=${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.json() : Promise.reject(new Error(r.status))).then(d => (d && d.contents) || ''),
+            () => fetch(`https://api.codetabs.com/v1/proxy?quest=${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.text() : Promise.reject(new Error(r.status))),
+            () => fetch(`https://api.cors.lol/?url=${encoded}`, { mode: 'cors' }).then(r => r.ok ? r.json() : Promise.reject(new Error(r.status))).then(d => (d && d.contents) || (typeof d === 'string' ? d : ''))
+        ];
+        let html = '';
+        for (let i = 0; i < proxyFetchers.length; i++) {
+            try {
+                html = await proxyFetchers[i]();
+                if (html && html.length > 500) break;
+            } catch (e) {
+                console.warn('openTiarinAlbumDetail proxy', i + 1, 'failed:', e.message);
+            }
+        }
+        if (this.exploreDetailLoadingIndicator) this.exploreDetailLoadingIndicator.style.display = 'none';
+        if (!html || html.length < 200) {
+            this.showError('خطا در بارگذاری آلبوم تیارین.', { retry: () => this.openTiarinAlbumDetail(albumTrack) });
+            if (this.exploreDetailContainer) this.exploreDetailContainer.innerHTML = '<div class="explore-loading"><p>خطا در بارگذاری. لطفاً دوباره تلاش کنید.</p></div>';
+            return;
+        }
+        const tracks = this.parseTiarinAlbumPage(html, pageUrl, albumTrack);
+        if (tracks.length > 0) {
+            this.playlist = tracks;
+            this.exploreDetailTracks = [];
+            this.currentIndex = -1;
+            this.currentPlaylistId = null;
+            this.savePlaylist();
+            if (this.exploreDetailContainer) {
+                this.exploreDetailContainer.innerHTML = '';
+                tracks.forEach(track => {
+                    const trackEl = this.createTrackElement(track, 'explore');
+                    this.exploreDetailContainer.appendChild(trackEl);
+                });
+            }
+            this.showToast(`آلبوم با ${tracks.length} آهنگ بارگذاری شد. برای پخش روی آهنگ مورد نظر کلیک کنید.`, 'success');
+            this.updateAddAllToPlaylistButtonState();
+        } else {
+            const single = { id: 'tiarin-single', title: albumTrack.title, artist: albumTrack.artist, url: pageUrl, pageUrl, image: albumTrack.image || '', source: 'tiarin' };
+            this.playlist = [single];
+            this.currentIndex = -1;
+            this.savePlaylist();
+            if (this.exploreDetailContainer) {
+                this.exploreDetailContainer.innerHTML = '';
+                const trackEl = this.createTrackElement(single, 'explore');
+                this.exploreDetailContainer.appendChild(trackEl);
+            }
+            this.showToast('یک آهنگ یافت شد. برای پخش کلیک کنید.', 'success');
+            this.updateAddAllToPlaylistButtonState();
+        }
+    }
+
+    parseTiarinAlbumPage(html, pageUrl, albumTrack) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const baseUrl = 'https://tiarin.ir';
+        const tracks = [];
+        const seen = new Set();
+        const blockedPathParts = ['about', 'contact', 'genre', 'mood', 'publisher', 'راهنما', 'ورود', 'ثبت'];
+        const blockedTitles = ['درباره تیارین', 'تماس با ما', 'راهنما', 'ورود', 'ثبت نام', 'خانه', 'صفحه اصلی'];
+        const isBlockedTitle = (t) => {
+            if (!t || typeof t !== 'string') return true;
+            const s = t.trim();
+            if (s.length < 2) return true;
+            if (blockedTitles.some(b => s === b || s.includes(b))) return true;
+            return false;
+        };
+        const isBlockedUrl = (href) => {
+            if (!href) return true;
+            try {
+                const path = (href.startsWith('http') ? href : baseUrl + (href.startsWith('/') ? href : '/' + href));
+                const pathname = new URL(path).pathname.replace(/^\/|\/$/g, '').toLowerCase();
+                return blockedPathParts.some(part => pathname.includes(part));
+            } catch (_) { return true; }
+        };
+        const addTrack = (title, artist, url, image) => {
+            if (!url || seen.has(url)) return;
+            if (isBlockedTitle(title) || isBlockedUrl(url)) return;
+            seen.add(url);
+            const slug = (url.split('/').filter(Boolean).pop() || url).replace(/\?.*$/, '').slice(-36) || String(url.length);
+            const finalTitle = (title && String(title).trim().length >= 2) ? String(title).trim() : ('ترک ' + (tracks.length + 1));
+            tracks.push({
+                id: 'tiarin-t-' + tracks.length + '-' + slug,
+                title: finalTitle,
+                artist: artist || albumTrack.artist || 'تیارین',
+                url,
+                pageUrl: url,
+                image: image || albumTrack.image || '',
+                source: 'tiarin'
+            });
+        };
+
+        // استخراج نام آهنگ از آدرس MP3 (همیشه قابل اتکا). فرمت: ...//01%20Derakht.mp3 یا path/01%20Title.mp3
+        const titleFromTiarinUrl = (url) => {
+            try {
+                const u = new URL(url, baseUrl);
+                let raw = u.searchParams.get('filename') || u.pathname.split('/').pop() || '';
+                if (raw.includes('//')) raw = raw.split('//').pop();
+                raw = decodeURIComponent(raw).replace(/\.(mp3|m4a|flac)(\?|$)/i, '').trim();
+                const title = raw.replace(/^\d{1,3}\s*[-.]?\s*/, '').trim();
+                return title.length >= 2 ? title : '';
+            } catch (_) { return ''; }
+        };
+
+        // استخراج عنوان و خواننده از div.audioplayer-item-title
+        const getTitleAndArtistFromTitleEl = (titleEl) => {
+            const firstSpan = titleEl.querySelector('span');
+            const artist = firstSpan ? (firstSpan.textContent || '').trim().replace(/\s+/g, ' ') : '';
+            let title = '';
+            const textNodes = Array.from(titleEl.childNodes).filter(n => n.nodeType === Node.TEXT_NODE);
+            if (textNodes.length) title = textNodes.map(n => (n.textContent || '').trim()).join(' ').trim().replace(/\s+/g, ' ');
+            if (!title) {
+                const clone = titleEl.cloneNode(true);
+                clone.querySelectorAll('span').forEach(s => s.remove());
+                title = (clone.textContent || '').trim().replace(/\s+/g, ' ');
+            }
+            if (!title && firstSpan) {
+                const full = (titleEl.textContent || '').trim();
+                title = full.replace((firstSpan.textContent || '').trim(), '').trim().replace(/\s+/g, ' ');
+            }
+            return { title, artist };
+        };
+
+        // روش ۱ (اصلی): فقط لینک‌های MP3 (نه FLAC)، به ترتیب DOM. عنوان حتماً از آدرس یا از همان ردیف li.
+        const allMp3Links = doc.querySelectorAll('a[href*=".mp3"]');
+        const mp3Only = Array.from(allMp3Links).filter(a => {
+            const h = (a.getAttribute('href') || a.href || '').toLowerCase();
+            return h.includes('.mp3') && !h.includes('.zip') && !h.includes('.flac');
+        });
+        if (mp3Only.length > 0) {
+            mp3Only.forEach((a, i) => {
+                const href = a.getAttribute('href') || a.href;
+                let full = href.startsWith('http') ? href : (href.startsWith('/') ? baseUrl + href : baseUrl + '/' + href);
+                try { full = new URL(full, baseUrl).href; } catch (_) {}
+                if (seen.has(full)) return;
+                let title = titleFromTiarinUrl(full);
+                let artist = albumTrack.artist || 'تیارین';
+                const row = a.closest('li.audioplayer-track-item');
+                if (row) {
+                    const titleEl = row.querySelector('.audioplayer-item-title');
+                    if (titleEl) {
+                        const got = getTitleAndArtistFromTitleEl(titleEl);
+                        if (got.title && got.title.length >= 2) title = got.title;
+                        if (got.artist) artist = got.artist;
+                    }
+                }
+                if (!title) title = 'ترک ' + (i + 1);
+                addTrack(title, artist, full, '');
+            });
+            if (tracks.length > 0) return tracks;
+        }
+
+        // روش ۲: لیست li.audioplayer-track-item در صورت وجود در DOM
+        const tracklistRoot = doc.querySelector('.audioplayer-tracklist-container') || doc.querySelector('.audioplayer-tracks-wrapper') || doc.querySelector('ul.audioplayer-tracks') || doc.body;
+        let tiarinTrackItems = tracklistRoot.querySelectorAll('li.audioplayer-track-item');
+        if (tiarinTrackItems.length === 0) {
+            const allLi = tracklistRoot.querySelectorAll('li');
+            tiarinTrackItems = Array.from(allLi).filter(li => li.querySelector('.audioplayer-item-title') && li.querySelector('a[href*=".mp3"]')) || [];
+        }
+        tiarinTrackItems.forEach((li, i) => {
+            const mp3Link = li.querySelector('.dldrop-links a[href*=".mp3"]') || li.querySelector('a[href*=".mp3"]');
+            if (!mp3Link) return;
+            const href = mp3Link.getAttribute('href') || mp3Link.href;
+            if (!href || href.toLowerCase().includes('.flac') || href.toLowerCase().includes('.zip')) return;
+            let trackUrl = href.startsWith('http') ? href : (href.startsWith('/') ? baseUrl + href : baseUrl + '/' + href);
+            try { trackUrl = new URL(trackUrl, baseUrl).href; } catch (_) {}
+            if (seen.has(trackUrl)) return;
+            let title = titleFromTiarinUrl(trackUrl);
+            let artist = albumTrack.artist || 'تیارین';
+            const titleEl = li.querySelector('.audioplayer-item-title');
+            if (titleEl) {
+                const got = getTitleAndArtistFromTitleEl(titleEl);
+                if (got.title && got.title.length >= 2) title = got.title;
+                if (got.artist) artist = got.artist;
+            }
+            if (!title) title = 'ترک ' + (i + 1);
+            addTrack(title, artist, trackUrl, '');
+        });
+        if (tracks.length > 0) return tracks;
+
+        const root = doc.querySelector('main, #main, .content, #content, [class*="album"], [class*="tracklist"]') || doc.body;
+        const albumLinks = root.querySelectorAll('a[href*="tiarin.ir/album/"], a[href*="tiarin.ir/single/"]');
+        albumLinks.forEach((a, i) => {
+            const href = a.getAttribute('href') || a.href;
+            if (!href || href.includes('/genre/') || href.includes('/mood/') || href.includes('/artist/') || isBlockedUrl(href)) return;
+            const full = href.startsWith('http') ? href : (href.startsWith('/') ? baseUrl + href : baseUrl + '/' + href);
+            if (seen.has(full)) return;
+            let title = (a.textContent || '').trim().replace(/\s+/g, ' ');
+            const row = a.closest('tr, li, .track, .song, [class*="track"]');
+            let artist = albumTrack.artist || 'تیارین';
+            if (row) {
+                const artistEl = row.querySelector('a[href*="tiarin.ir/artist"], .artist, [class*="artist"]');
+                if (artistEl) artist = (artistEl.textContent || '').trim() || artist;
+                const titleCell = row.querySelector('.title, [class*="title"]');
+                if ((!title || title.length < 2) && titleCell) title = (titleCell.textContent || '').trim().replace(/\s+/g, ' ');
+            }
+            if (!title || title.length < 2) title = 'ترک ' + (i + 1);
+            addTrack(title, artist, full, '');
+        });
+
+        const mp3Links = root.querySelectorAll('a[href*=".mp3"], a[href*=".m4a"], a[href*="vip-dl"]');
+        mp3Links.forEach((a, i) => {
+            const href = a.getAttribute('href') || a.href;
+            if (!href || href.toLowerCase().includes('.zip')) return;
+            if (href.toLowerCase().includes('.flac')) return;
+            if (href.includes('vip-dl') && !href.includes('.mp3') && !href.includes('.m4a')) return;
+            let full = href.startsWith('http') ? href : (href.startsWith('/') ? baseUrl + href : baseUrl + '/' + href);
+            try { full = new URL(full, baseUrl).href; } catch (_) {}
+            if (seen.has(full)) return;
+            let title = titleFromTiarinUrl(full);
+            let artist = albumTrack.artist || 'تیارین';
+            const row = a.closest('li.audioplayer-track-item') || a.closest('tr, li, .track, .song');
+            const titleEl = row ? row.querySelector('.audioplayer-item-title') : null;
+            if (titleEl) {
+                const got = getTitleAndArtistFromTitleEl(titleEl);
+                if (got.title && got.title.length >= 2) title = got.title;
+                if (got.artist) artist = got.artist;
+            }
+            if (!title) title = 'ترک ' + (i + 1);
+            addTrack(title, artist, full, '');
+        });
+
+        const dataSrcItems = doc.querySelectorAll('[data-src], [data-audio], [data-mp3], [data-url]');
+        dataSrcItems.forEach((el, i) => {
+            const src = (el.getAttribute('data-src') || el.getAttribute('data-audio') || el.getAttribute('data-mp3') || el.getAttribute('data-url') || '').trim();
+            if (!src || (!src.includes('.mp3') && !src.includes('.m4a'))) return;
+            let full = src.startsWith('http') ? src : (src.startsWith('/') ? baseUrl + src : baseUrl + '/' + src);
+            try { full = new URL(full, baseUrl).href; } catch (_) {}
+            if (seen.has(full)) return;
+            let title = (el.getAttribute('data-title') || '').trim();
+            if (!title || title.length < 2) title = titleFromTiarinUrl(full);
+            if (!title) title = 'ترک ' + (i + 1);
+            const artist = (el.getAttribute('data-artist') || '').trim() || albumTrack.artist || 'تیارین';
+            addTrack(title, artist, full, '');
+        });
+
+        const tableRows = root.querySelectorAll('table tbody tr, .track-list tr, ul li');
+        tableRows.forEach((row, i) => {
+            const link = row.querySelector('a[href*="tiarin.ir/album"], a[href*="tiarin.ir/single"], a[href*="tiarin.ir"]');
+            if (!link) return;
+            const href = link.getAttribute('href') || link.href;
+            if (!href || href.includes('/genre/') || href.includes('/artist/') || href.includes('.zip') || isBlockedUrl(href)) return;
+            const full = href.startsWith('http') ? href : (href.startsWith('/') ? baseUrl + href : baseUrl + '/' + href);
+            if (seen.has(full)) return;
+            let title = (link.textContent || '').trim().replace(/\s+/g, ' ');
+            const artistEl = row.querySelector('a[href*="tiarin.ir/artist"], .artist, [class*="artist"]');
+            const artist = artistEl ? (artistEl.textContent || '').trim() : (albumTrack.artist || 'تیارین');
+            if (!title || title.length < 2) title = 'ترک ' + (i + 1);
+            addTrack(title, artist, full, '');
+        });
+
+        return tracks;
+    }
+
     parseSearchResults(html, query, page = 1) {
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
@@ -1755,7 +2293,12 @@ class MusicPlayer {
                                 <svg class="heart-icon" width="16" height="16" viewBox="0 0 24 24" fill="${isFavorite ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2">
                                     <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
                                 </svg>
-                             </button>` :
+                             </button>${source === 'home' ? `
+                             <button class="btn btn-small btn-remove-from-recent" data-action="remove-from-recent" data-source="${source}" data-track-id="${track.id}" title="حذف از موزیک‌های اخیر">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                                </svg>
+                             </button>` : ''}` :
                             `<button class="btn btn-small btn-play" data-action="play" data-track-id="${track.id}" title="پخش">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                                     <path d="M8 5v14l11-7z"/>
@@ -1798,6 +2341,11 @@ class MusicPlayer {
                             }
                         }
                     }
+                } else if (action === 'remove-from-recent' && source === 'home') {
+                    this.recentTracks = this.recentTracks.filter(t => t.id !== track.id && !this.isSameTrackByUrl(t, track));
+                    this.saveRecentData();
+                    this.displayRecentTracks();
+                    this.showToast('از موزیک‌های اخیر حذف شد', 'success');
                 } else if (action === 'add-to-custom') {
                     if (source === 'home' || source === 'explore') {
                         this.showAddToPlaylistDialog(null, track);
@@ -1846,9 +2394,13 @@ class MusicPlayer {
                         // For home page (recent tracks), play directly from track object
                         this.loadAndPlay(track);
                     } else if (source === 'results') {
-                        // آلبوم و پلی‌لیست ملواز: باز کردن صفحه جزئیات و نمایش لیست آهنگ‌ها (مثل برترین‌ها)
+                        // آلبوم و پلی‌لیست ملواز/تیارین: باز کردن صفحه جزئیات و نمایش لیست آهنگ‌ها
                         if (track && track.source === 'melovaz' && track.isAlbumOrPlaylist) {
                             this.openMelovazAlbumDetail(track);
+                            return;
+                        }
+                        if (track && track.source === 'tiarin' && track.isAlbumOrPlaylist) {
+                            this.openTiarinAlbumDetail(track);
                             return;
                         }
                         if (!trackIdStr) return;
@@ -1898,6 +2450,10 @@ class MusicPlayer {
             if (source === 'results') {
                 if (track && track.source === 'melovaz' && track.isAlbumOrPlaylist) {
                     this.openMelovazAlbumDetail(track);
+                    return;
+                }
+                if (track && track.source === 'tiarin' && track.isAlbumOrPlaylist) {
+                    this.openTiarinAlbumDetail(track);
                     return;
                 }
                 const trackIdStr = div.dataset.trackId;
@@ -2644,6 +3200,9 @@ class MusicPlayer {
         if (pageUrl && pageUrl.includes('melovaz.ir')) {
             return this.extractAudioUrlFromMelovazPage(pageUrl);
         }
+        if (pageUrl && pageUrl.includes('tiarin.ir')) {
+            return this.extractAudioUrlFromTiarinPage(pageUrl);
+        }
         try {
             // Use multiple CORS proxies in parallel with short timeouts (robust for podcasts)
             const proxyPromises = [
@@ -3066,6 +3625,112 @@ class MusicPlayer {
             return returnResult(null);
         } catch (e) {
             console.error('extractAudioUrlFromMelovazPage parse error:', e);
+            return { url: null, title: null, artist: null, image: null };
+        }
+    }
+
+    async extractAudioUrlFromTiarinPage(pageUrl, fromAlbumFallback = false) {
+        const baseUrl = 'https://tiarin.ir';
+        const returnResult = (url) => ({ url, title: null, artist: null, image: null });
+        if (pageUrl && pageUrl.includes('vip-dl') && (pageUrl.includes('.mp3') || pageUrl.includes('.m4a'))) {
+            return returnResult(pageUrl);
+        }
+        const encoded = encodeURIComponent(pageUrl);
+        const proxyFetchers = [
+            async () => {
+                const r = await fetch(`https://corsproxy.io/?${encoded}`, { mode: 'cors' });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return await r.text();
+            },
+            async () => {
+                const r = await fetch(`https://api.allorigins.win/raw?url=${encoded}`, { mode: 'cors' });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return await r.text();
+            },
+            async () => {
+                const r = await fetch(`https://api.allorigins.win/get?url=${encoded}`, { mode: 'cors' });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                const data = await r.json();
+                return (data && data.contents) || '';
+            },
+            async () => {
+                const r = await fetch(`https://api.codetabs.com/v1/proxy?quest=${encoded}`, { mode: 'cors' });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return await r.text();
+            },
+            async () => {
+                const r = await fetch(`https://api.cors.lol/?url=${encoded}`, { mode: 'cors' });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                const data = await r.json();
+                return (data && data.contents) || (typeof data === 'string' ? data : '');
+            }
+        ];
+        let html = '';
+        for (let i = 0; i < proxyFetchers.length; i++) {
+            try {
+                html = await proxyFetchers[i]();
+                if (html && html.length > 500) break;
+            } catch (e) {
+                console.warn('Tiarin proxy', i + 1, 'failed:', e.message);
+            }
+        }
+        if (!html || html.length < 200) {
+            return { url: null, title: null, artist: null, image: null };
+        }
+        try {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const audioSrc = doc.querySelector('audio source, audio[src]');
+            if (audioSrc) {
+                const src = (audioSrc.src || audioSrc.getAttribute('src') || '').trim();
+                if (src && (src.includes('.mp3') || src.includes('.m4a') || src.includes('.ogg'))) {
+                    const final = src.startsWith('http') ? src : (src.startsWith('/') ? baseUrl + src : baseUrl + '/' + src);
+                    return returnResult(final);
+                }
+            }
+            const dataSrc = doc.querySelector('[data-src], [data-audio], [data-mp3], [data-url]');
+            if (dataSrc) {
+                const src = (dataSrc.getAttribute('data-src') || dataSrc.getAttribute('data-audio') || dataSrc.getAttribute('data-mp3') || dataSrc.getAttribute('data-url') || '').trim();
+                if (src && (src.includes('.mp3') || src.includes('.m4a'))) {
+                    const final = src.startsWith('http') ? src : (src.startsWith('/') ? baseUrl + src : baseUrl + '/' + src);
+                    return returnResult(final);
+                }
+            }
+            const mp3Links = doc.querySelectorAll('a[href*=".mp3"], a[href*=".m4a"]');
+            for (const a of mp3Links) {
+                const href = a.getAttribute('href') || a.href || '';
+                if (href.includes('.zip')) continue;
+                const final = href.startsWith('http') ? href : (href.startsWith('/') ? baseUrl + href : baseUrl + '/' + href);
+                if (final && (final.endsWith('.mp3') || final.endsWith('.m4a') || final.includes('.mp3') || final.includes('.m4a'))) {
+                    return returnResult(final);
+                }
+            }
+            const scripts = doc.querySelectorAll('script');
+            for (const script of scripts) {
+                const content = script.textContent || '';
+                const match = content.match(/https?:\/\/[^\s"']+\.(mp3|m4a)(?:\?[^\s"']*)?/i);
+                if (match && match[0] && !match[0].includes('.zip')) {
+                    return returnResult(match[0].trim());
+                }
+            }
+            if (!fromAlbumFallback) {
+                const root = doc.querySelector('main, #main, .content, [class*="album"], [class*="tracklist"]') || doc.body;
+                const firstTrack = root.querySelector('a[href*="tiarin.ir/album/"], a[href*="tiarin.ir/single/"]');
+                if (firstTrack) {
+                    let firstHref = firstTrack.getAttribute('href') || firstTrack.href || '';
+                    if (firstHref && !firstHref.includes('/genre/') && !firstHref.includes('/artist/')) {
+                        const firstPageUrl = firstHref.startsWith('http') ? firstHref : (firstHref.startsWith('/') ? baseUrl + firstHref : baseUrl + '/' + firstHref);
+                        if (firstPageUrl !== pageUrl) {
+                            try {
+                                const sub = await this.extractAudioUrlFromTiarinPage(firstPageUrl, true);
+                                if (sub && sub.url) return returnResult(sub.url);
+                            } catch (_) {}
+                        }
+                    }
+                }
+            }
+            return returnResult(null);
+        } catch (e) {
+            console.error('extractAudioUrlFromTiarinPage parse error:', e);
             return { url: null, title: null, artist: null, image: null };
         }
     }
@@ -6036,11 +6701,25 @@ class MusicPlayer {
                     <h4>${this.escapeHtml(name || 'بدون نام')}</h4>
                     <p>${tracksCount} موزیک</p>
                 </div>
-                <button class="btn btn-small btn-play-playlist" data-playlist-id="${id}">▶ پخش</button>
+                <div class="recent-playlist-actions">
+                    <button class="btn btn-small btn-play-playlist" data-playlist-id="${id}" title="پخش">▶ پخش</button>
+                    <button class="btn btn-small btn-remove-from-recent" data-action="remove-playlist-from-recent" data-playlist-id="${id}" title="حذف از پلی‌لیست‌های اخیر">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                        </svg>
+                    </button>
+                </div>
             `;
             
             playlistEl.querySelector('.btn-play-playlist').addEventListener('click', () => {
                 this.selectCustomPlaylist(id);
+            });
+            playlistEl.querySelector('.btn-remove-from-recent').addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.recentPlaylists = this.recentPlaylists.filter(p => p.id !== id);
+                this.saveRecentData();
+                this.displayRecentPlaylists();
+                this.showToast('از پلی‌لیست‌های اخیر حذف شد', 'success');
             });
             
             this.recentPlaylistsContainer.appendChild(playlistEl);
@@ -6076,7 +6755,9 @@ class MusicPlayer {
 
         const fetchPromise = this.currentSearchSource === SEARCH_SOURCES.melovaz
             ? this.fetchSearchResultsMelovaz(query, 1)
-            : this.fetchSearchResults(query, 1);
+            : this.currentSearchSource === SEARCH_SOURCES.tiarin
+                ? this.fetchSearchResultsTiarin(query, 1)
+                : this.fetchSearchResults(query, 1);
 
         fetchPromise.then(result => {
             console.log('Search results received:', result);
@@ -6549,7 +7230,9 @@ class MusicPlayer {
             console.log(`Fetching page ${nextPage} for query: ${this.currentSearchQuery}`);
             const result = this.currentSearchSource === SEARCH_SOURCES.melovaz
                 ? await this.fetchSearchResultsMelovaz(this.currentSearchQuery, nextPage)
-                : await this.fetchSearchResults(this.currentSearchQuery, nextPage);
+                : this.currentSearchSource === SEARCH_SOURCES.tiarin
+                    ? await this.fetchSearchResultsTiarin(this.currentSearchQuery, nextPage)
+                    : await this.fetchSearchResults(this.currentSearchQuery, nextPage);
             
             // Handle both formats
             let newResults = [];

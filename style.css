@@ -376,7 +376,7 @@ body {
     padding-top: 0;
 }
 
-/* Search source tabs (Tehran / Melovaz) */
+/* Search source tabs (Tehran / Melovaz / Tiarin) */
 .search-source-tabs {
     display: flex;
     gap: 8px;
@@ -808,6 +808,23 @@ body {
 .recent-playlist-item:hover {
     background: var(--bg-hover);
     border-color: var(--spotify-green);
+}
+
+.recent-playlist-item .recent-playlist-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.recent-playlist-item .btn-remove-from-recent {
+    padding: 8px;
+    min-width: 0;
+    color: var(--text-secondary);
+}
+.recent-playlist-item .btn-remove-from-recent:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
 }
 
 /* Playlists Page */
