@@ -691,11 +691,21 @@ class MusicPlayer {
             if (this.playerPageFavoriteBtn) {
                 this.playerPageFavoriteBtn.classList.toggle('favorite-active', !!isFavorite);
                 this.playerPageFavoriteBtn.title = isFavorite ? 'حذف از علاقه‌مندی‌ها' : 'اضافه به علاقه‌مندی‌ها';
+                // Update heart icon fill attribute
+                const heartIcon = this.playerPageFavoriteBtn.querySelector('.heart-icon');
+                if (heartIcon) {
+                    heartIcon.setAttribute('fill', isFavorite ? 'currentColor' : 'none');
+                }
             }
             const playerBarFavoriteBtn = document.getElementById('playerBarFavoriteBtn');
             if (playerBarFavoriteBtn) {
                 playerBarFavoriteBtn.classList.toggle('favorite-active', !!isFavorite);
                 playerBarFavoriteBtn.title = isFavorite ? 'حذف از علاقه‌مندی‌ها' : 'اضافه به علاقه‌مندی‌ها';
+                // Update heart icon fill attribute
+                const heartIconBar = playerBarFavoriteBtn.querySelector('.heart-icon');
+                if (heartIconBar) {
+                    heartIconBar.setAttribute('fill', isFavorite ? 'currentColor' : 'none');
+                }
             }
         }
         this.updateFavoriteButtonsOnTrackCards(track, isFavorite);
@@ -6868,53 +6878,134 @@ class MusicPlayer {
         const result = { count: 0, size: 0, totalUsage: 0 };
         if (!('caches' in window)) return result;
 
-        // Try to get audio cache stats from Service Worker first (more reliable)
-        if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-            try {
-                const swResult = await new Promise((resolve) => {
-                    const mc = new MessageChannel();
-                    let done = false;
-                    const t = setTimeout(() => {
-                        if (!done) { done = true; resolve(null); }
-                    }, 3000);
-                    mc.port1.onmessage = (e) => {
-                        if (!done) { done = true; clearTimeout(t); resolve(e.data); }
-                    };
-                    navigator.serviceWorker.controller.postMessage({ type: 'getCacheStats' }, [mc.port2]);
-                });
-                if (swResult) {
-                    result.count = swResult.count || 0;
-                    result.size = swResult.size || 0;
-                }
-            } catch (e) {
-                console.debug('SW cache stats failed, using direct:', e);
-            }
-        }
-        if (result.count === 0 && result.size === 0) {
-            try {
-                const cache = await caches.open('mytehran-audio-v1');
-                const keys = await cache.keys();
-                result.count = keys.length;
-                for (const request of keys) {
-                    try {
-                        const response = await cache.match(request);
-                        if (response) {
-                            const cl = response.headers.get('content-length');
-                            if (cl) {
-                                result.size += parseInt(cl, 10) || 0;
-                            } else {
-                                const blob = await response.blob();
-                                result.size += blob.size;
+        // Always try to get cache stats directly from cache API (most reliable)
+        try {
+            const cache = await caches.open('mytehran-audio-v1');
+            const keys = await cache.keys();
+            result.count = keys.length;
+            
+            console.log(`[Cache Stats] Found ${result.count} cached entries`);
+            
+            // Calculate size for each cached entry
+            for (const request of keys) {
+                try {
+                    // Get a fresh response for each request
+                    const response = await cache.match(request);
+                    if (!response) {
+                        console.debug(`[Cache Stats] No response for: ${request.url}`);
+                        continue;
+                    }
+                    
+                    let entrySize = 0;
+                    let sizeFound = false;
+                    
+                    // Try content-length header first (doesn't consume body)
+                    const cl = response.headers.get('content-length');
+                    if (cl) {
+                        const size = parseInt(cl, 10);
+                        if (!isNaN(size) && size > 0) {
+                            entrySize = size;
+                            sizeFound = true;
+                            console.debug(`[Cache Stats] Entry ${request.url}: ${entrySize} bytes (from header)`);
+                        }
+                    }
+                    // For 206 Partial Content, get total size from Content-Range (e.g. "bytes 0-12345/123456")
+                    if (!sizeFound && response.status === 206) {
+                        const cr = response.headers.get('content-range');
+                        if (cr) {
+                            const match = cr.match(/bytes\s+\d+-\d+\/(\d+)/) || cr.match(/bytes\s+\*\/(\d+)/);
+                            if (match) {
+                                const total = parseInt(match[1], 10);
+                                if (!isNaN(total) && total > 0) {
+                                    entrySize = total;
+                                    sizeFound = true;
+                                    console.debug(`[Cache Stats] Entry ${request.url}: ${entrySize} bytes (from Content-Range)`);
+                                }
                             }
                         }
-                    } catch (err) {
-                        // Opaque response - skip
                     }
+                    // If header didn't work, try to read the body
+                    if (!sizeFound) {
+                        try {
+                            // Clone the response before reading body to avoid consumption
+                            const clonedResponse = response.clone();
+                            
+                            // Try blob first
+                            if (!clonedResponse.bodyUsed) {
+                                try {
+                                    const blob = await clonedResponse.blob();
+                                    if (blob && blob.size > 0) {
+                                        entrySize = blob.size;
+                                        sizeFound = true;
+                                        console.debug(`[Cache Stats] Entry ${request.url}: ${entrySize} bytes (from blob)`);
+                                    }
+                                } catch (blobErr) {
+                                    console.debug(`[Cache Stats] Blob failed for ${request.url}:`, blobErr);
+                                }
+                            }
+                            
+                            // If blob failed, try arrayBuffer
+                            if (!sizeFound) {
+                                const freshResponse = await cache.match(request);
+                                if (freshResponse && !freshResponse.bodyUsed) {
+                                    try {
+                                        const arrayBuffer = await freshResponse.arrayBuffer();
+                                        if (arrayBuffer && arrayBuffer.byteLength > 0) {
+                                            entrySize = arrayBuffer.byteLength;
+                                            sizeFound = true;
+                                            console.debug(`[Cache Stats] Entry ${request.url}: ${entrySize} bytes (from arrayBuffer)`);
+                                        }
+                                    } catch (arrayBufferErr) {
+                                        console.debug(`[Cache Stats] ArrayBuffer failed for ${request.url}:`, arrayBufferErr);
+                                    }
+                                }
+                            }
+                        } catch (bodyErr) {
+                            console.debug(`[Cache Stats] Could not read body for ${request.url}:`, bodyErr);
+                        }
+                    }
+                    
+                    if (sizeFound && entrySize > 0) {
+                        result.size += entrySize;
+                    } else {
+                        console.warn(`[Cache Stats] Could not determine size for: ${request.url}`);
+                    }
+                } catch (err) {
+                    // Opaque response or other error - skip this entry
+                    console.debug(`[Cache Stats] Error processing cache entry: ${request.url}`, err);
                 }
-            } catch (e) {
-                console.warn('Could not get cache stats:', e);
+            }
+            
+            console.log(`[Cache Stats] Total size calculated: ${result.size} bytes (${(result.size / 1024 / 1024).toFixed(2)} MB)`);
+        } catch (e) {
+            console.warn('[Cache Stats] Could not get cache stats directly:', e);
+            
+            // Fallback: Try to get stats from Service Worker
+            if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+                try {
+                    const swResult = await new Promise((resolve) => {
+                        const mc = new MessageChannel();
+                        let done = false;
+                        const t = setTimeout(() => {
+                            if (!done) { done = true; resolve(null); }
+                        }, 3000);
+                        mc.port1.onmessage = (e) => {
+                            if (!done) { done = true; clearTimeout(t); resolve(e.data); }
+                        };
+                        navigator.serviceWorker.controller.postMessage({ type: 'getCacheStats' }, [mc.port2]);
+                    });
+                    if (swResult && (swResult.count > 0 || swResult.size > 0)) {
+                        result.count = swResult.count || 0;
+                        result.size = swResult.size || 0;
+                        console.log(`[Cache Stats] Got stats from Service Worker: ${result.count} entries, ${result.size} bytes`);
+                    }
+                } catch (swErr) {
+                    console.debug('[Cache Stats] SW cache stats also failed:', swErr);
+                }
             }
         }
+        
+        // Get total storage usage
         if (navigator.storage && navigator.storage.estimate) {
             try {
                 const estimate = await navigator.storage.estimate();
@@ -6923,6 +7014,7 @@ class MusicPlayer {
                 console.warn('Could not get storage estimate:', e);
             }
         }
+        
         return result;
     }
 
@@ -6956,7 +7048,13 @@ class MusicPlayer {
             } else if (!navigator.serviceWorker?.controller) {
                 hintEl.textContent = 'Service Worker هنوز فعال نیست. صفحه را refresh کنید و دوباره آهنگ پخش کنید.';
                 hintEl.style.display = 'block';
+            } else {
+                hintEl.textContent = 'هیچ آهنگی کش نشده است. آهنگ‌ها هنگام پخش به صورت خودکار کش می‌شوند. برای دیباگ، کنسول مرورگر را باز کنید (F12).';
+                hintEl.style.display = 'block';
             }
+        } else if (hintEl && stats.count > 0 && stats.size === 0) {
+            hintEl.textContent = `⚠️ ${stats.count} آهنگ در کش پیدا شد اما حجم آن‌ها قابل محاسبه نیست. برای جزئیات بیشتر، کنسول مرورگر را باز کنید (F12).`;
+            hintEl.style.display = 'block';
         }
     }
 

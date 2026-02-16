@@ -123,14 +123,19 @@ self.addEventListener('fetch', (event) => {
             return cachedResponse;
           }
           return fetch(event.request).then((response) => {
-            // Cache only 200 (full file). 206 = Range request, cannot cache.
+            // Cache 200 (full file) or 206 (partial) so we have something for offline and stats
             if (response.status === 200) {
               const responseToCache = response.clone();
               cache.put(cacheKey, responseToCache).then(() => {
                 cleanupAudioCache();
               }).catch(() => {});
             } else if (response.status === 206 && !response.bodyUsed) {
-              // Range request: fetch full file in background for cache
+              // Cache 206 so entry exists (many servers never return 200 for audio)
+              const responseToCache = response.clone();
+              cache.put(cacheKey, responseToCache).then(() => {
+                cleanupAudioCache();
+              }).catch(() => {});
+              // Optionally try to get full file in background to replace with 200
               fetch(cacheKey).then((fullRes) => {
                 if (fullRes.status === 200) {
                   cache.put(cacheKey, fullRes).then(() => {
@@ -212,26 +217,106 @@ self.addEventListener('message', async (event) => {
       const cache = await caches.open(AUDIO_CACHE_NAME);
       const keys = await cache.keys();
       result.count = keys.length;
+      
+      console.log(`[SW Cache Stats] Found ${result.count} cached entries`);
+      
       for (const request of keys) {
         try {
+          // Get a fresh response for each request
           const response = await cache.match(request);
-          if (response) {
-            const cl = response.headers.get('content-length');
-            if (cl) {
-              result.size += parseInt(cl, 10) || 0;
-            } else {
-              const blob = await response.blob();
-              result.size += blob.size;
+          if (!response) {
+            console.debug(`[SW Cache Stats] No response for: ${request.url}`);
+            continue;
+          }
+          
+          let entrySize = 0;
+          let sizeFound = false;
+          
+          // Try content-length header first (doesn't consume body)
+          const cl = response.headers.get('content-length');
+          if (cl) {
+            const size = parseInt(cl, 10);
+            if (!isNaN(size) && size > 0) {
+              entrySize = size;
+              sizeFound = true;
+              console.debug(`[SW Cache Stats] Entry ${request.url}: ${entrySize} bytes (from header)`);
             }
           }
+          // For 206 Partial Content, get total size from Content-Range (e.g. "bytes 0-12345/123456")
+          if (!sizeFound && response.status === 206) {
+            const cr = response.headers.get('content-range');
+            if (cr) {
+              const match = cr.match(/bytes\s+\d+-\d+\/(\d+)/) || cr.match(/bytes\s+\*\/(\d+)/);
+              if (match) {
+                const total = parseInt(match[1], 10);
+                if (!isNaN(total) && total > 0) {
+                  entrySize = total;
+                  sizeFound = true;
+                  console.debug(`[SW Cache Stats] Entry ${request.url}: ${entrySize} bytes (from Content-Range)`);
+                }
+              }
+            }
+          }
+          // If header didn't work, try to read the body
+          if (!sizeFound) {
+            try {
+              // Clone the response before reading body to avoid consumption
+              const clonedResponse = response.clone();
+              
+              // Try blob first
+              if (!clonedResponse.bodyUsed) {
+                try {
+                  const blob = await clonedResponse.blob();
+                  if (blob && blob.size > 0) {
+                    entrySize = blob.size;
+                    sizeFound = true;
+                    console.debug(`[SW Cache Stats] Entry ${request.url}: ${entrySize} bytes (from blob)`);
+                  }
+                } catch (blobErr) {
+                  console.debug(`[SW Cache Stats] Blob failed for ${request.url}:`, blobErr);
+                }
+              }
+              
+              // If blob failed, try arrayBuffer
+              if (!sizeFound) {
+                const freshResponse = await cache.match(request);
+                if (freshResponse && !freshResponse.bodyUsed) {
+                  try {
+                    const arrayBuffer = await freshResponse.arrayBuffer();
+                    if (arrayBuffer && arrayBuffer.byteLength > 0) {
+                      entrySize = arrayBuffer.byteLength;
+                      sizeFound = true;
+                      console.debug(`[SW Cache Stats] Entry ${request.url}: ${entrySize} bytes (from arrayBuffer)`);
+                    }
+                  } catch (arrayBufferErr) {
+                    console.debug(`[SW Cache Stats] ArrayBuffer failed for ${request.url}:`, arrayBufferErr);
+                  }
+                }
+              }
+            } catch (bodyErr) {
+              console.debug(`[SW Cache Stats] Could not read body for ${request.url}:`, bodyErr);
+            }
+          }
+          
+          if (sizeFound && entrySize > 0) {
+            result.size += entrySize;
+          } else {
+            console.warn(`[SW Cache Stats] Could not determine size for: ${request.url}`);
+          }
         } catch (err) {
-          // Opaque response - skip size for this entry
+          // Opaque response or other error - skip this entry
+          console.debug(`[SW Cache Stats] Error processing cache entry: ${request.url}`, err);
         }
       }
+      
+      console.log(`[SW Cache Stats] Total size calculated: ${result.size} bytes (${(result.size / 1024 / 1024).toFixed(2)} MB)`);
     } catch (e) {
-      console.warn('SW: Could not get cache stats:', e);
+      console.warn('[SW Cache Stats] Could not get cache stats:', e);
     }
-    event.ports[0].postMessage(result);
+    
+    if (event.ports && event.ports[0]) {
+      event.ports[0].postMessage(result);
+    }
   }
 });
 
