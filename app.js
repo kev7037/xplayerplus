@@ -33,6 +33,7 @@ class MusicPlayer {
         this.wakeLock = null; // برای پخش در پس‌زمینه وقتی صفحه قفل است
         this.preloadAudio = null; // پیش‌بارگذاری آهنگ بعدی برای جلوگیری از قطع پخش
         this.lastOutputDeviceIds = new Set(); // برای تشخیص قطع بلوتوث و توقف پخش
+        this.lastBluetoothCheckTime = 0; // دوره امن بعد از شروع/عوض آهنگ تا اشتباها پاز نشه
         this.customPlaylists = {}; // Initialize customPlaylists
         this.currentPlaylistId = null;
         this.nextPlaylistId = 1;
@@ -3785,6 +3786,7 @@ class MusicPlayer {
     }
 
     loadAndPlay(track) {
+        this.lastBluetoothCheckTime = Date.now(); // تا عوض شدن آهنگ تمام نشه به خاطر devicechange پاز نکن
         this.closeLyricsModal();
         this.currentTrackData = track;
         if (this.playlist && this.playlist.length > 0) {
@@ -5293,7 +5295,8 @@ class MusicPlayer {
             this.playlist = [track];
             this.currentIndex = 0;
             this.loadAndPlay(track);
-            history.replaceState({}, '', window.location.pathname);
+            const cleanUrl = window.location.origin + (window.location.pathname || '/') + (window.location.hash || '');
+            history.replaceState({}, '', cleanUrl);
         } catch (e) {
             console.warn('Could not play from URL:', e);
         }
@@ -5776,11 +5779,39 @@ class MusicPlayer {
         return (div.textContent || div.innerText || '').trim();
     }
 
+    isShareableTrackUrl(url) {
+        if (!url || typeof url !== 'string') return false;
+        if (url.startsWith('blob:')) return false;
+        const proxyHosts = ['corsproxy.io', 'allorigins.win', 'codetabs.com', 'cors.lol', 'cors.io'];
+        try {
+            const u = new URL(url);
+            if (proxyHosts.some((h) => u.hostname.includes(h))) return false;
+        } catch (_) { return false; }
+        return true;
+    }
     getShareUrlForTrack(track) {
         if (!track) return '';
-        const trackSourceUrl = track.pageUrl || track.url;
-        const appUrl = new URL('index.html', window.location.href).href;
-        return trackSourceUrl ? `${appUrl}${appUrl.includes('?') ? '&' : '?'}play=${encodeURIComponent(trackSourceUrl)}` : appUrl;
+        const pageUrl = track.pageUrl && this.isShareableTrackUrl(track.pageUrl) ? track.pageUrl : null;
+        const directUrl = track.url && this.isShareableTrackUrl(track.url) ? track.url : null;
+        const trackSourceUrl = pageUrl || directUrl;
+        if (!trackSourceUrl) return '';
+        const origin = window.location.origin;
+        const path = (window.location.pathname || '/').replace(/index\.html$/i, '') || '/';
+        const base = path.endsWith('/') ? origin + path : origin + path + '/';
+        const isNetlify = window.location.hostname.includes('netlify.app');
+        if (isNetlify) {
+            const params = new URLSearchParams();
+            params.set('play', trackSourceUrl);
+            params.set('title', track.title || 'آهنگ');
+            params.set('artist', track.artist || 'ناشناس');
+            if (track.image && this.isShareableTrackUrl(track.image)) params.set('image', track.image);
+            const pathOnly = (window.location.pathname || '/').replace(/index\.html$/i, '').replace(/\/?preview\/?$/i, '') || '/';
+            if (pathOnly !== '/') params.set('appBase', pathOnly.replace(/\/$/, ''));
+            return base.replace(/\/$/, '') + '/preview?' + params.toString();
+        }
+        const appBase = origin + (window.location.pathname || '/');
+        const sep = appBase.includes('?') ? '&' : '?';
+        return appBase + sep + 'play=' + encodeURIComponent(trackSourceUrl);
     }
 
     showStoryShareModal(track, blob) {
@@ -5833,6 +5864,10 @@ class MusicPlayer {
         });
 
         modal.querySelector('.btn-copy-story-link').addEventListener('click', async () => {
+            if (!shareUrl) {
+                this.showToast('لینک اشتراک‌گذاری برای این آهنگ در دسترس نیست', 'info');
+                return;
+            }
             try {
                 await navigator.clipboard.writeText(shareUrl);
                 this.showToast('لینک کپی شد. در اینستاگرام لینک را به استوری اضافه کنید', 'success');
@@ -5891,6 +5926,10 @@ class MusicPlayer {
             return;
         }
         const shareUrl = this.getShareUrlForTrack(track);
+        if (!shareUrl) {
+            this.showToast('لینک اشتراک‌گذاری برای این آهنگ در دسترس نیست', 'info');
+            return;
+        }
         const shareText = `${track.title || 'آهنگ'} - ${track.artist || 'ناشناس'}`;
         const shareData = {
             title: track.title || 'آهنگ',
@@ -7146,15 +7185,18 @@ class MusicPlayer {
         return ids;
     }
     updateOutputDevicesForBluetoothCheck() {
+        this.lastBluetoothCheckTime = Date.now();
         this.getAudioOutputDeviceIds().then((ids) => {
             this.lastOutputDeviceIds = ids;
         }).catch(() => {});
     }
     setupBluetoothDisconnectHandler() {
+        const GRACE_MS = 5000; // بعد از عوض شدن آهنگ این مدت devicechange رو نادیده بگیر تا پلی‌لیست قطع نشه
         try {
             if (!navigator.mediaDevices || typeof navigator.mediaDevices.addEventListener !== 'function') return;
             navigator.mediaDevices.addEventListener('devicechange', () => {
                 if (!this.audioPlayer || this.audioPlayer.paused) return;
+                if (Date.now() - this.lastBluetoothCheckTime < GRACE_MS) return; // تازه آهنگ عوض شده؛ پاز نکن
                 if (this.lastOutputDeviceIds.size === 0) return;
                 this.getAudioOutputDeviceIds().then((currentIds) => {
                     const removed = [...this.lastOutputDeviceIds].filter((id) => !currentIds.has(id));

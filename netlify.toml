@@ -1,0 +1,6 @@
+# Netlify: مسیر /preview برای پیش‌نمایش لینک اشتراک (عنوان، خواننده، عکس)
+[[redirects]]
+  from = "/preview"
+  to = "/.netlify/functions/preview"
+  status = 200
+  force = true
