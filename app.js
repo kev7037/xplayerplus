@@ -208,13 +208,17 @@ class MusicPlayer {
     attachEventListeners() {
         // Audio events
         this.audioPlayer.addEventListener('ended', () => {
+            console.log('[Audio] ended event fired, repeatMode:', this.repeatMode);
             if (this.repeatMode === 1) {
                 // Repeat one: play the same track again
                 this.audioPlayer.currentTime = 0;
-                this.audioPlayer.play();
+                this.audioPlayer.play().catch(err => console.error('[Audio] Play error on repeat:', err));
             } else {
-                // Play next track
-                this.playNext();
+                // Play next track - use setTimeout to ensure it runs even when screen is locked
+                setTimeout(() => {
+                    console.log('[Audio] Calling playNext from ended event');
+                    this.playNext();
+                }, 100);
             }
         });
         this.audioPlayer.addEventListener('error', (e) => {
@@ -4045,7 +4049,9 @@ class MusicPlayer {
                             if (!directFailed) this.cacheAudio(url);
                             this.requestWakeLock();
                             this.updateOutputDevicesForBluetoothCheck();
+                            console.log('[Audio] Direct play succeeded for:', url.substring(0, 50));
                         }).catch((e) => {
+                            console.error('[Audio] Direct play failed:', e);
                             if (e.name === 'NotAllowedError' || (e.message && (e.message.includes('play') || e.message.includes('user gesture')))) {
                                 hideLoading();
                                 return;
@@ -4849,8 +4855,17 @@ class MusicPlayer {
             return;
         }
 
-        // Continue playing next track
-        this.loadAndPlay(this.playlist[this.currentIndex]);
+        // Continue playing next track - ensure it plays even when screen is locked
+        const nextTrack = this.playlist[this.currentIndex];
+        if (!nextTrack) {
+            console.warn('[PlayNext] No track at index', this.currentIndex);
+            return;
+        }
+        console.log('[PlayNext] Loading next track:', nextTrack.title || 'Unknown', 'index:', this.currentIndex, 'playlist length:', this.playlist.length);
+        // Use setTimeout to ensure loadAndPlay runs even when screen is locked/throttled
+        setTimeout(() => {
+            this.loadAndPlay(nextTrack);
+        }, 50);
     }
 
     playPrevious() {
@@ -5789,16 +5804,23 @@ class MusicPlayer {
         } catch (_) { return false; }
         return true;
     }
+    getShareBaseUrl() {
+        const meta = document.querySelector('meta[name="share-base-url"]');
+        const canonical = meta && meta.getAttribute('content');
+        if (canonical && canonical.startsWith('http')) return canonical.replace(/\/?$/, '/');
+        const origin = window.location.origin;
+        const path = (window.location.pathname || '/').replace(/index\.html$/i, '') || '/';
+        return path.endsWith('/') ? origin + path : origin + path + '/';
+    }
     getShareUrlForTrack(track) {
         if (!track) return '';
         const pageUrl = track.pageUrl && this.isShareableTrackUrl(track.pageUrl) ? track.pageUrl : null;
         const directUrl = track.url && this.isShareableTrackUrl(track.url) ? track.url : null;
         const trackSourceUrl = pageUrl || directUrl;
         if (!trackSourceUrl) return '';
-        const origin = window.location.origin;
-        const path = (window.location.pathname || '/').replace(/index\.html$/i, '') || '/';
-        const base = path.endsWith('/') ? origin + path : origin + path + '/';
-        const isNetlify = window.location.hostname.includes('netlify.app');
+        const base = this.getShareBaseUrl();
+        const baseOrigin = base.startsWith('http') ? new URL(base).origin : window.location.origin;
+        const isNetlify = baseOrigin.includes('netlify.app') || window.location.hostname.includes('netlify.app');
         if (isNetlify) {
             const params = new URLSearchParams();
             params.set('play', trackSourceUrl);
@@ -5809,9 +5831,8 @@ class MusicPlayer {
             if (pathOnly !== '/') params.set('appBase', pathOnly.replace(/\/$/, ''));
             return base.replace(/\/$/, '') + '/preview?' + params.toString();
         }
-        const appBase = origin + (window.location.pathname || '/');
-        const sep = appBase.includes('?') ? '&' : '?';
-        return appBase + sep + 'play=' + encodeURIComponent(trackSourceUrl);
+        const sep = base.includes('?') ? '&' : '?';
+        return base + sep + 'play=' + encodeURIComponent(trackSourceUrl);
     }
 
     showStoryShareModal(track, blob) {
@@ -7235,10 +7256,22 @@ class MusicPlayer {
                 });
             }
         };
-        navigator.mediaSession.setActionHandler('play', () => this.audioPlayer.play());
-        navigator.mediaSession.setActionHandler('pause', () => this.audioPlayer.pause());
-        navigator.mediaSession.setActionHandler('previoustrack', () => this.playPrevious());
-        navigator.mediaSession.setActionHandler('nexttrack', () => this.playNext());
+        navigator.mediaSession.setActionHandler('play', () => {
+            console.log('[MediaSession] play action');
+            this.audioPlayer.play().catch(err => console.error('[MediaSession] Play error:', err));
+        });
+        navigator.mediaSession.setActionHandler('pause', () => {
+            console.log('[MediaSession] pause action');
+            this.audioPlayer.pause();
+        });
+        navigator.mediaSession.setActionHandler('previoustrack', () => {
+            console.log('[MediaSession] previoustrack action');
+            this.playPrevious();
+        });
+        navigator.mediaSession.setActionHandler('nexttrack', () => {
+            console.log('[MediaSession] nexttrack action - calling playNext');
+            this.playNext();
+        });
         this.audioPlayer.addEventListener('play', () => this.updateMediaSession?.());
     }
 
