@@ -32,8 +32,9 @@ class MusicPlayer {
         this.sleepTimerInterval = null;
         this.wakeLock = null; // برای پخش در پس‌زمینه وقتی صفحه قفل است
         this.preloadAudio = null; // پیش‌بارگذاری آهنگ بعدی برای جلوگیری از قطع پخش
-        this.lastOutputDeviceIds = new Set(); // برای تشخیص قطع بلوتوث و توقف پخش
-        this.lastBluetoothCheckTime = 0; // دوره امن بعد از شروع/عوض آهنگ تا اشتباها پاز نشه
+        this.lastOutputDeviceIds = new Set();
+        this.lastBluetoothCheckTime = 0;
+        this.endedCheckInterval = null; // fallback وقتی ended در پس‌زمینه فایر نشه
         this.customPlaylists = {}; // Initialize customPlaylists
         this.currentPlaylistId = null;
         this.nextPlaylistId = 1;
@@ -208,23 +209,21 @@ class MusicPlayer {
     attachEventListeners() {
         // Audio events
         this.audioPlayer.addEventListener('ended', () => {
-            console.log('[Audio] ended event fired, repeatMode:', this.repeatMode);
+            this.clearEndedCheckInterval();
             if (this.repeatMode === 1) {
-                // Repeat one: play the same track again
                 this.audioPlayer.currentTime = 0;
-                this.audioPlayer.play().catch(err => console.error('[Audio] Play error on repeat:', err));
+                this.audioPlayer.play().catch(() => {});
             } else {
-                // Play next track - use setTimeout to ensure it runs even when screen is locked
-                setTimeout(() => {
-                    console.log('[Audio] Calling playNext from ended event');
-                    this.playNext();
-                }, 100);
+                this.playNext();
             }
         });
-        this.audioPlayer.addEventListener('error', (e) => {
+        this.audioPlayer.addEventListener('error', () => {
+            this.clearEndedCheckInterval();
             this.showError('خطا در پخش موزیک. لطفا موزیک دیگری انتخاب کنید.');
-            this.playNext();
+            setTimeout(() => this.playNext(), 200);
         });
+        this.audioPlayer.addEventListener('play', () => this.startEndedCheckInterval());
+        this.audioPlayer.addEventListener('pause', () => this.clearEndedCheckInterval());
         this.audioPlayer.addEventListener('timeupdate', () => {
             this.updateProgressBar();
         });
@@ -3920,13 +3919,10 @@ class MusicPlayer {
                 this.updatePlayButton();
                 // Add to recent tracks
                 this.addToRecentTracks(track);
-            }).catch(err => {
-                console.error('Play error:', err);
-                // Check if it's a CORS error
+            }).catch((err) => {
                 if (err.name === 'NotAllowedError' || err.message.includes('CORS') || err.message.includes('cross-origin')) {
                     handleAudioError(err);
                 } else {
-                    // Other error, try error handler anyway
                     handleAudioError(err);
                 }
             });
@@ -4049,9 +4045,7 @@ class MusicPlayer {
                             if (!directFailed) this.cacheAudio(url);
                             this.requestWakeLock();
                             this.updateOutputDevicesForBluetoothCheck();
-                            console.log('[Audio] Direct play succeeded for:', url.substring(0, 50));
                         }).catch((e) => {
-                            console.error('[Audio] Direct play failed:', e);
                             if (e.name === 'NotAllowedError' || (e.message && (e.message.includes('play') || e.message.includes('user gesture')))) {
                                 hideLoading();
                                 return;
@@ -4785,6 +4779,24 @@ class MusicPlayer {
             }
         } catch (_) {}
     }
+    clearEndedCheckInterval() {
+        if (this.endedCheckInterval) {
+            clearInterval(this.endedCheckInterval);
+            this.endedCheckInterval = null;
+        }
+    }
+    startEndedCheckInterval() {
+        this.clearEndedCheckInterval();
+        this.endedCheckInterval = setInterval(() => {
+            if (!this.audioPlayer || this.audioPlayer.paused || this.playlist.length === 0 || this.repeatMode === 1) return;
+            const d = this.audioPlayer.duration;
+            const t = this.audioPlayer.currentTime;
+            if (d > 0 && t >= d - 0.8) {
+                this.clearEndedCheckInterval();
+                this.playNext();
+            }
+        }, 2000);
+    }
     setTrackImage(imgEl, imageUrl, placeholder) {
         const ph = placeholder || 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23b3b3b3"%3E%3Cpath d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/%3E%3C/svg%3E';
         if (!imgEl) return;
@@ -4855,17 +4867,9 @@ class MusicPlayer {
             return;
         }
 
-        // Continue playing next track - ensure it plays even when screen is locked
         const nextTrack = this.playlist[this.currentIndex];
-        if (!nextTrack) {
-            console.warn('[PlayNext] No track at index', this.currentIndex);
-            return;
-        }
-        console.log('[PlayNext] Loading next track:', nextTrack.title || 'Unknown', 'index:', this.currentIndex, 'playlist length:', this.playlist.length);
-        // Use setTimeout to ensure loadAndPlay runs even when screen is locked/throttled
-        setTimeout(() => {
-            this.loadAndPlay(nextTrack);
-        }, 50);
+        if (!nextTrack) return;
+        this.loadAndPlay(nextTrack);
     }
 
     playPrevious() {
@@ -5982,15 +5986,26 @@ class MusicPlayer {
             (this.shuffledIndices[this.shuffledIndices.indexOf(this.currentIndex) + 1]) :
             this.currentIndex + 1;
         const nextTrack = nextIdx >= 0 && nextIdx < this.playlist.length ? this.playlist[nextIdx] : null;
-        if (!nextTrack?.url) return;
-        const url = nextTrack.url;
-        const isDirect = url.endsWith('.mp3') || url.endsWith('.m4a') || url.endsWith('.ogg') || url.includes('dl.mytehranmusic.com');
-        if (isDirect) {
-            if (!this.preloadAudio) this.preloadAudio = new Audio();
-            this.preloadAudio.src = url;
-            this.preloadAudio.load();
-        } else {
-            fetch(url).catch(() => {});
+        if (!nextTrack) return;
+        if (nextTrack.url) {
+            const url = nextTrack.url;
+            const isDirect = url.endsWith('.mp3') || url.endsWith('.m4a') || url.endsWith('.ogg') || url.includes('dl.mytehranmusic.com');
+            if (isDirect) {
+                if (!this.preloadAudio) this.preloadAudio = new Audio();
+                this.preloadAudio.src = url;
+                this.preloadAudio.load();
+            } else {
+                fetch(url).catch(() => {});
+            }
+            return;
+        }
+        if (nextTrack.pageUrl && typeof this.extractAudioUrl === 'function') {
+            this.extractAudioUrl(nextTrack.pageUrl).then((result) => {
+                const url = result && typeof result === 'object' ? result.url : result;
+                if (url && !url.startsWith('DIRECTORY:')) {
+                    nextTrack.url = url;
+                }
+            }).catch(() => {});
         }
     }
 
@@ -7212,16 +7227,16 @@ class MusicPlayer {
         }).catch(() => {});
     }
     setupBluetoothDisconnectHandler() {
-        const GRACE_MS = 5000; // بعد از عوض شدن آهنگ این مدت devicechange رو نادیده بگیر تا پلی‌لیست قطع نشه
+        const GRACE_MS = 12000; // بعد از عوض آهنگ این مدت اصلاً به devicechange واکنش نده
         try {
             if (!navigator.mediaDevices || typeof navigator.mediaDevices.addEventListener !== 'function') return;
             navigator.mediaDevices.addEventListener('devicechange', () => {
                 if (!this.audioPlayer || this.audioPlayer.paused) return;
-                if (Date.now() - this.lastBluetoothCheckTime < GRACE_MS) return; // تازه آهنگ عوض شده؛ پاز نکن
-                if (this.lastOutputDeviceIds.size === 0) return;
+                if (Date.now() - this.lastBluetoothCheckTime < GRACE_MS) return;
+                if (this.lastOutputDeviceIds.size < 2) return; // فقط وقتی قبلاً بیش از یک خروجی داشتیم (مثلاً بلوتوث+اسپیکر)
                 this.getAudioOutputDeviceIds().then((currentIds) => {
                     const removed = [...this.lastOutputDeviceIds].filter((id) => !currentIds.has(id));
-                    if (removed.length > 0) {
+                    if (removed.length > 0 && currentIds.size < this.lastOutputDeviceIds.size) {
                         this.audioPlayer.pause();
                         this.releaseWakeLock();
                         this.updatePlayButton();
@@ -7256,22 +7271,10 @@ class MusicPlayer {
                 });
             }
         };
-        navigator.mediaSession.setActionHandler('play', () => {
-            console.log('[MediaSession] play action');
-            this.audioPlayer.play().catch(err => console.error('[MediaSession] Play error:', err));
-        });
-        navigator.mediaSession.setActionHandler('pause', () => {
-            console.log('[MediaSession] pause action');
-            this.audioPlayer.pause();
-        });
-        navigator.mediaSession.setActionHandler('previoustrack', () => {
-            console.log('[MediaSession] previoustrack action');
-            this.playPrevious();
-        });
-        navigator.mediaSession.setActionHandler('nexttrack', () => {
-            console.log('[MediaSession] nexttrack action - calling playNext');
-            this.playNext();
-        });
+        navigator.mediaSession.setActionHandler('play', () => this.audioPlayer.play().catch(() => {}));
+        navigator.mediaSession.setActionHandler('pause', () => this.audioPlayer.pause());
+        navigator.mediaSession.setActionHandler('previoustrack', () => this.playPrevious());
+        navigator.mediaSession.setActionHandler('nexttrack', () => this.playNext());
         this.audioPlayer.addEventListener('play', () => this.updateMediaSession?.());
     }
 

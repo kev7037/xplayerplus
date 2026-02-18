@@ -3,7 +3,7 @@ const APP_SHELL_CACHE_NAME = 'xplayer-app-shell-v1';
 const AUDIO_CACHE_NAME = 'mytehran-audio-v1';
 const IMAGE_CACHE_NAME = 'xplayer-images-v1';
 const MAX_AUDIO_CACHE_SIZE = 50 * 1024 * 1024; // 50MB limit for audio cache
-const FETCH_TIMEOUT_MS = 4000; // وقتی اینترنت ضعیف/قطع است زود به کش برگردیم
+const FETCH_TIMEOUT_MS = 3000; // وقتی اینترنت ضعیف/قطع است خیلی زود به کش برگردیم
 
 // App shell files - pre-cached for offline use (when internet is completely off)
 function getAppShellUrls() {
@@ -71,49 +71,28 @@ self.addEventListener('fetch', (event) => {
                      url.pathname === '/' ||
                      (url.pathname.endsWith('/') && url.hostname === self.location.hostname);
   
-  // App shell: cache-first برای لود فوری و کار آفلاین؛ در پس‌زمینه fetch با timeout
+  // App shell: کش‌اول؛ اگر نبود با timeout ۳ثانیه شبکه؛ بعد دوباره کش یا صفحه آفلاین
   if (isCodeFile && url.origin === self.location.origin) {
+    const req = event.request;
+    const cacheKey = url.pathname === '/' || url.pathname === '' ? new URL('index.html', url.origin + '/') : req;
+    const offlinePage = new Response(
+      '<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><title>xPlayer</title></head><body style="font-family:sans-serif;padding:20px;text-align:center"><h1>آفلاین</h1><p>اتصال اینترنت را روشن کنید و یک‌بار با اینترنت برنامه را باز کنید.</p></body></html>',
+      { headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+    );
     event.respondWith(
       caches.open(APP_SHELL_CACHE_NAME).then((cache) => {
-        const fromCache = cache.match(event.request).then((cached) => {
-          if (cached) return cached;
-          if (url.pathname === '/' || url.pathname === '') {
-            return cache.match(new URL('index.html', url.origin + '/'));
-          }
-          return null;
-        });
-        const fromNetwork = new Promise((resolve, reject) => {
-          const t = setTimeout(() => reject(new Error('timeout')), FETCH_TIMEOUT_MS);
-          fetch(event.request)
-            .then((response) => {
-              clearTimeout(t);
-              if (response.status === 200) {
-                const clone = response.clone();
-                cache.put(event.request, clone).catch(() => {});
-              }
-              resolve(response);
-            })
-            .catch((err) => {
-              clearTimeout(t);
-              reject(err);
-            });
-        });
-        return fromCache.then((cached) => {
+        return cache.match(cacheKey).then((cached) => {
           if (cached) {
-            fromNetwork.catch(() => {}); // به‌روزرسانی در پس‌زمینه
+            fetch(req).then((r) => { if (r.ok) cache.put(req, r.clone()); }).catch(() => {});
             return cached;
           }
-          return fromNetwork;
-        }).catch(() => fromCache);
-      }).then((response) => {
-        if (response) return response;
-        return caches.open(APP_SHELL_CACHE_NAME).then((cache) => {
-          const fallback = url.pathname === '/' || url.pathname === '' ?
-            cache.match(new URL('index.html', url.origin + '/')) : cache.match(event.request);
-          return fallback.then((c) => c || new Response(
-            '<!DOCTYPE html><html dir="rtl"><head><meta charset="UTF-8"><title>xPlayer</title></head><body style="font-family:sans-serif;padding:20px;text-align:center"><h1>آفلاین</h1><p>لطفاً اتصال اینترنت را روشن کنید و یک‌بار برنامه را با اینترنت باز کنید تا برای استفاده آفلاین آماده شود.</p></body></html>',
-            { headers: { 'Content-Type': 'text/html; charset=utf-8' } }
-          ));
+          return Promise.race([
+            fetch(req),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), FETCH_TIMEOUT_MS))
+          ]).then((r) => {
+            if (r.ok) cache.put(req, r.clone()).catch(() => {});
+            return r;
+          }).catch(() => cache.match(cacheKey).then((c2) => c2 || cache.match(new URL('index.html', url.origin + '/'))).then((c) => c || offlinePage));
         });
       })
     );
